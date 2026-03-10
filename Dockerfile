@@ -1,4 +1,4 @@
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
 COPY package*.json ./
@@ -12,9 +12,9 @@ RUN npx prisma generate
 RUN cd web && npm run build
 RUN npx tsc
 
-FROM node:20-alpine
+FROM node:20-slim
 
-RUN apk add --no-cache openssl
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY package*.json ./
