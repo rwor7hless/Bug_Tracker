@@ -1,0 +1,239 @@
+import { useState } from "react";
+
+interface Ticket {
+  id: string;
+  description: string;
+  crashReport?: string | null;
+  status: "OPEN" | "IN_PROGRESS" | "DUPLICATE" | "RESOLVED";
+  category: string;
+  duplicateOf?: string | null;
+  bumpCount: number;
+  reportedBy: string;
+  createdAt: string;
+}
+
+interface Props {
+  ticket: Ticket;
+  isAdmin: boolean;
+  onBump: (id: string) => void;
+  onInProgress: (id: string) => void;
+  onResolve: (id: string) => void;
+  onReopen: (id: string) => void;
+  onDuplicate: (id: string, originalId: string) => void;
+  onDelete: (id: string) => void;
+}
+
+const categoryLabel: Record<string, string> = {
+  CRASH:    "Краш",
+  LAG:      "Лаги",
+  VISUAL:   "Визуал",
+  GAMEPLAY: "Геймплей",
+  OTHER:    "Другое",
+};
+
+const statusMeta: Record<string, { cls: string; text: string }> = {
+  OPEN:        { cls: "badge-open",     text: "Открыт" },
+  IN_PROGRESS: { cls: "badge-progress", text: "В работе" },
+  DUPLICATE:   { cls: "badge-dup",      text: "Дубликат" },
+  RESOLVED:    { cls: "badge-resolved", text: "Решено" },
+};
+
+export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onResolve, onReopen, onDuplicate, onDelete }: Props) {
+  const [showCrash, setShowCrash] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
+  const [dupId, setDupId] = useState("");
+
+  const date = new Date(ticket.createdAt).toLocaleString("ru-RU", {
+    day: "2-digit", month: "2-digit", year: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+
+  const isLink = ticket.crashReport?.startsWith("http");
+  const isFile = ticket.crashReport?.startsWith("[Файл");
+  const hasTextLog = ticket.crashReport && !isLink && !isFile;
+
+  function downloadLog() {
+    if (!hasTextLog) return;
+    const blob = new Blob([ticket.crashReport!], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `log-${ticket.id.slice(0, 8)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const { cls: statusClass, text: statusText } = statusMeta[ticket.status] ?? { cls: "badge-open", text: ticket.status };
+
+  return (
+    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--text)" }}>{ticket.description}</p>
+          {ticket.duplicateOf && (
+            <p style={{ fontSize: 12, color: "var(--text-3)", marginTop: 4 }}>
+              Дубликат тикета #{ticket.duplicateOf.slice(0, 8)}
+            </p>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, flexShrink: 0 }}>
+          <span className={`badge ${statusClass}`}>{statusText}</span>
+          <span style={{ fontSize: 12, color: "var(--text-3)" }}>{categoryLabel[ticket.category] ?? ticket.category}</span>
+        </div>
+      </div>
+
+      {ticket.crashReport && (
+        <div>
+          {isLink ? (
+            <a
+              href={ticket.crashReport}
+              target="_blank"
+              rel="noreferrer"
+              style={{ fontSize: 13, color: "var(--accent)", display: "inline-flex", alignItems: "center", gap: 4 }}
+            >
+              🔗 Открыть лог
+            </a>
+          ) : isFile ? (
+            <span style={{ fontSize: 13, color: "var(--text-3)" }}>{ticket.crashReport}</span>
+          ) : (
+            <div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <button
+                  className="btn-ghost"
+                  style={{ fontSize: 12, padding: "4px 10px" }}
+                  onClick={() => setShowCrash((v) => !v)}
+                >
+                  {showCrash ? "Скрыть лог" : "Показать лог"}
+                </button>
+                {isAdmin && (
+                  <button
+                    className="btn-ghost"
+                    style={{ fontSize: 12, padding: "4px 10px" }}
+                    onClick={downloadLog}
+                  >
+                    ↓ Скачать .txt
+                  </button>
+                )}
+              </div>
+              {showCrash && (
+                <pre style={{
+                  marginTop: 10,
+                  background: "#111",
+                  border: "1px solid var(--border)",
+                  borderRadius: "var(--radius)",
+                  padding: 12,
+                  fontSize: 11,
+                  lineHeight: 1.6,
+                  overflowX: "auto",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                  maxHeight: 280,
+                  overflowY: "auto",
+                  color: "var(--text-2)",
+                }}>
+                  {ticket.crashReport}
+                </pre>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        flexWrap: "wrap",
+        fontSize: 12,
+        color: "var(--text-3)",
+        borderTop: "1px solid var(--border)",
+        paddingTop: 10,
+      }}>
+        <span style={{ fontFamily: "monospace", color: "var(--text-2)" }}>#{ticket.id.slice(0, 8)}</span>
+        <span>·</span>
+        <span>{ticket.reportedBy}</span>
+        <span>·</span>
+        <span>{date}</span>
+        <span style={{
+          marginLeft: "auto",
+          background: "var(--surface2)",
+          borderRadius: 4,
+          padding: "2px 8px",
+          color: "var(--text-2)",
+          fontSize: 12,
+        }}>
+          ↑ {ticket.bumpCount}
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {ticket.status !== "RESOLVED" && (
+          <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => onBump(ticket.id)}>
+            ↑ Bump
+          </button>
+        )}
+        {isAdmin && ticket.status === "OPEN" && (
+          <>
+            <button
+              className="btn-ghost"
+              style={{ fontSize: 12, color: "#3b82f6", borderColor: "#3b82f6" }}
+              onClick={() => onInProgress(ticket.id)}
+            >
+              В работу
+            </button>
+            <button className="btn-success" style={{ fontSize: 12 }} onClick={() => onResolve(ticket.id)}>
+              Решено
+            </button>
+            <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => setDuplicating((v) => !v)}>
+              Дубликат
+            </button>
+          </>
+        )}
+        {isAdmin && ticket.status === "IN_PROGRESS" && (
+          <>
+            <button className="btn-success" style={{ fontSize: 12 }} onClick={() => onResolve(ticket.id)}>
+              Решено
+            </button>
+            <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => onReopen(ticket.id)}>
+              Вернуть в открытые
+            </button>
+          </>
+        )}
+        {isAdmin && (ticket.status === "RESOLVED" || ticket.status === "DUPLICATE") && (
+          <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => onReopen(ticket.id)}>
+            Вернуть в активные
+          </button>
+        )}
+        {isAdmin && (
+          <button className="btn-danger" style={{ fontSize: 12 }} onClick={() => onDelete(ticket.id)}>
+            Удалить
+          </button>
+        )}
+      </div>
+
+      {duplicating && (
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            placeholder="ID оригинального тикета"
+            value={dupId}
+            onChange={(e) => setDupId(e.target.value)}
+            style={{ flex: 1, fontSize: 13 }}
+          />
+          <button
+            className="btn-primary"
+            style={{ fontSize: 13 }}
+            onClick={() => {
+              if (dupId.trim()) {
+                onDuplicate(ticket.id, dupId.trim());
+                setDuplicating(false);
+                setDupId("");
+              }
+            }}
+          >
+            OK
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

@@ -1,0 +1,22 @@
+﻿import { Context } from "telegraf";
+import db from "../../db.js";
+import { formatCategory } from "../categorize.js";
+
+type Step = "category" | "description" | "crash_prompt" | "crash_type" | "crash_link" | "crash_text" | "crash_file" | "bump_id";
+type Session = { step?: Step; description?: string; category?: string; };
+
+export async function showMainMenu(ctx: Context) {
+  const c = ctx as any;
+  if (!c.session) c.session = {};
+  const s = c.session as Session;
+  s.step = undefined; s.description = undefined; s.category = undefined;
+  return ctx.reply(
+    String.fromCharCode(0x1F3AE) + " <b>MC Bug Report</b>\n\nChto khochesh sdelat'?",
+    { parse_mode: "HTML", reply_markup: { inline_keyboard: [
+      [{ text: "📝 Sozdat' bag-report", callback_data: "menu_report" }],
+      [{ text: "📋 Spisok otkrytykh bagov", callback_data: "menu_list" }],
+      [{ text: "👆 Bump tiketa", callback_data: "menu_bump" }],
+      [{ text: "🔑 Parol' dlya paneli", callback_data: "menu_password" }],
+    ]}}
+  );
+}

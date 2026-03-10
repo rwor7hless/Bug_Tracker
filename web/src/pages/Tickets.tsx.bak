@@ -1,0 +1,119 @@
+import { useEffect, useState } from "react";
+import TicketCard from "../components/TicketCard";
+import { useAuth } from "../components/AuthContext";
+
+interface Ticket {
+  id: string;
+  description: string;
+  crashReport?: string | null;
+  status: "OPEN" | "DUPLICATE" | "RESOLVED";
+  category: string;
+  duplicateOf?: string | null;
+  bumpCount: number;
+  reportedBy: string;
+  createdAt: string;
+}
+
+const ADMIN_STATUSES = ["OPEN", "DUPLICATE", "RESOLVED"] as const;
+const statusLabel: Record<string, string> = { OPEN: "Открытые", DUPLICATE: "Дубликаты", RESOLVED: "Решённые" };
+
+export default function Tickets() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [status, setStatus] = useState<string>("OPEN");
+  const [sort, setSort] = useState("date");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const params = new URLSearchParams({ sort });
+    // Moderators always see only OPEN
+    params.set("status", isAdmin ? status : "OPEN");
+    if (search) params.set("search", search);
+    const r = await fetch(`/api/tickets?${params}`);
+    if (r.ok) setTickets(await r.json());
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, [status, sort, search]);
+
+  async function bump(id: string) {
+    await fetch(`/api/tickets/${id}/bump`, { method: "POST" });
+    load();
+  }
+
+  async function resolve(id: string) {
+    await fetch(`/api/tickets/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "RESOLVED" }),
+    });
+    load();
+  }
+
+  async function duplicate(id: string, originalId: string) {
+    await fetch(`/api/tickets/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "DUPLICATE", duplicateOf: originalId }),
+    });
+    load();
+  }
+
+  async function del(id: string) {
+    if (!confirm("Удалить тикет?")) return;
+    await fetch(`/api/tickets/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  return (
+    <div style={{ maxWidth: 800, margin: "0 auto" }}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20, alignItems: "center" }}>
+        {isAdmin && (
+          <div style={{ display: "flex", gap: 4 }}>
+            {ADMIN_STATUSES.map((s) => (
+              <button
+                key={s}
+                className={status === s ? "btn-primary" : "btn-ghost"}
+                onClick={() => setStatus(s)}
+              >
+                {statusLabel[s]}
+              </button>
+            ))}
+          </div>
+        )}
+        <select style={{ width: "auto" }} value={sort} onChange={(e) => setSort(e.target.value)}>
+          <option value="date">По дате</option>
+          <option value="bumps">По bumps</option>
+        </select>
+        <input
+          placeholder="Поиск…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ width: 200 }}
+        />
+        <button className="btn-ghost" onClick={load} disabled={loading}>↻</button>
+      </div>
+
+      {loading && <p style={{ color: "#666" }}>Загрузка…</p>}
+      {!loading && tickets.length === 0 && <p style={{ color: "#666" }}>Нет тикетов.</p>}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {tickets.map((t) => (
+          <TicketCard
+            key={t.id}
+            ticket={t}
+            isAdmin={isAdmin}
+            onBump={bump}
+            onResolve={resolve}
+            onDuplicate={duplicate}
+            onDelete={del}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}

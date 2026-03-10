@@ -1,0 +1,253 @@
+import { useEffect, useState } from "react";
+import TicketCard from "../components/TicketCard";
+import { useAuth } from "../components/AuthContext";
+
+interface Ticket {
+  id: string;
+  description: string;
+  crashReport?: string | null;
+  status: "OPEN" | "IN_PROGRESS" | "DUPLICATE" | "RESOLVED";
+  category: string;
+  duplicateOf?: string | null;
+  bumpCount: number;
+  reportedBy: string;
+  createdAt: string;
+}
+
+const CATEGORIES = [
+  { value: "CRASH",    label: "Краш" },
+  { value: "LAG",      label: "Лаги" },
+  { value: "VISUAL",   label: "Визуал" },
+  { value: "GAMEPLAY", label: "Геймплей" },
+  { value: "OTHER",    label: "Другое" },
+] as const;
+
+const ADMIN_STATUSES = ["OPEN", "IN_PROGRESS", "DUPLICATE", "RESOLVED"] as const;
+const statusLabel: Record<string, string> = {
+  OPEN: "Открытые",
+  IN_PROGRESS: "В работе",
+  DUPLICATE: "Дубликаты",
+  RESOLVED: "Решённые",
+};
+
+export default function Tickets() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "ADMIN";
+
+  const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [status, setStatus] = useState<string>("OPEN");
+  const [sort, setSort] = useState("date");
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const [showCreate, setShowCreate] = useState(false);
+  const [newCategory, setNewCategory] = useState("OTHER");
+  const [newDescription, setNewDescription] = useState("");
+  const [newCrash, setNewCrash] = useState("");
+  const [creating, setCreating] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    const params = new URLSearchParams({ sort });
+    params.set("status", status);
+    if (search) params.set("search", search);
+    const r = await fetch(`/api/tickets?${params}`);
+    if (r.ok) setTickets(await r.json());
+    setLoading(false);
+  }
+
+  useEffect(() => { load(); }, [status, sort, search]);
+
+  async function createTicket() {
+    if (!newDescription.trim()) return;
+    setCreating(true);
+    await fetch("/api/tickets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        description: newDescription.trim(),
+        crashReport: newCrash.trim() || undefined,
+        category: newCategory,
+      }),
+    });
+    setCreating(false);
+    setShowCreate(false);
+    setNewDescription("");
+    setNewCrash("");
+    setNewCategory("OTHER");
+    load();
+  }
+
+  async function bump(id: string) {
+    await fetch(`/api/tickets/${id}/bump`, { method: "POST" });
+    load();
+  }
+
+  async function inProgress(id: string) {
+    await fetch(`/api/tickets/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "IN_PROGRESS" }),
+    });
+    load();
+  }
+
+  async function resolve(id: string) {
+    await fetch(`/api/tickets/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "RESOLVED" }),
+    });
+    load();
+  }
+
+  async function duplicate(id: string, originalId: string) {
+    await fetch(`/api/tickets/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "DUPLICATE", duplicateOf: originalId }),
+    });
+    load();
+  }
+
+  async function reopen(id: string) {
+    await fetch(`/api/tickets/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "OPEN", duplicateOf: null }),
+    });
+    load();
+  }
+
+  async function del(id: string) {
+    if (!confirm("Удалить тикет?")) return;
+    await fetch(`/api/tickets/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  const modStatuses = ["OPEN", "IN_PROGRESS"] as const;
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 24, alignItems: "center" }}>
+        <div style={{ display: "flex", gap: 4 }}>
+          {(isAdmin ? ADMIN_STATUSES : modStatuses).map((s) => (
+            <button
+              key={s}
+              className={status === s ? "btn-primary" : "btn-ghost"}
+              onClick={() => setStatus(s)}
+              style={{ fontSize: 13 }}
+            >
+              {statusLabel[s]}
+            </button>
+          ))}
+        </div>
+
+        <select style={{ width: "auto", fontSize: 13 }} value={sort} onChange={(e) => setSort(e.target.value)}>
+          <option value="date">По дате</option>
+          <option value="bumps">По bumps</option>
+        </select>
+
+        <input
+          placeholder="Поиск…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ width: 200, fontSize: 13 }}
+        />
+
+        <button className="btn-ghost" onClick={load} disabled={loading} style={{ padding: "7px 10px" }}>↻</button>
+
+        <button
+          className="btn-primary"
+          onClick={() => setShowCreate(true)}
+          style={{ marginLeft: "auto", padding: "7px 16px" }}
+        >
+          + Создать тикет
+        </button>
+      </div>
+
+      {loading && <p style={{ color: "var(--text-3)", fontSize: 14 }}>Загрузка…</p>}
+      {!loading && tickets.length === 0 && <p style={{ color: "var(--text-3)", fontSize: 14 }}>Тикетов нет.</p>}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {tickets.map((t) => (
+          <TicketCard
+            key={t.id}
+            ticket={t}
+            isAdmin={isAdmin}
+            onBump={bump}
+            onInProgress={inProgress}
+            onResolve={resolve}
+            onReopen={reopen}
+            onDuplicate={duplicate}
+            onDelete={del}
+          />
+        ))}
+      </div>
+
+      {showCreate && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowCreate(false); }}
+        >
+          <div className="modal">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <span className="modal-title">Новый тикет</span>
+              <button className="btn-ghost" onClick={() => setShowCreate(false)} style={{ padding: "4px 10px" }}>✕</button>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>Категория</label>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {CATEGORIES.map((c) => (
+                  <button
+                    key={c.value}
+                    className={"tag-btn" + (newCategory === c.value ? " active" : "")}
+                    onClick={() => setNewCategory(c.value)}
+                    type="button"
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>Описание *</label>
+              <textarea
+                placeholder="Опиши баг подробно: что произошло, как воспроизвести…"
+                value={newDescription}
+                onChange={(e) => setNewDescription(e.target.value)}
+                rows={4}
+              />
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>
+                Лог / ссылка <span style={{ color: "var(--text-3)" }}>(необязательно)</span>
+              </label>
+              <textarea
+                placeholder="Текст лога или ссылка (mclo.gs, pastebin…)"
+                value={newCrash}
+                onChange={(e) => setNewCrash(e.target.value)}
+                rows={3}
+              />
+            </div>
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button className="btn-ghost" onClick={() => setShowCreate(false)}>Отмена</button>
+              <button
+                className="btn-primary"
+                onClick={createTicket}
+                disabled={creating || !newDescription.trim()}
+                style={{ padding: "8px 20px" }}
+              >
+                {creating ? "Создаём…" : "Создать"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

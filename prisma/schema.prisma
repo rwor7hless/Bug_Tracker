@@ -1,0 +1,58 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Ticket {
+  id          String   @id @default(uuid())
+  description String
+  crashReport String?
+  status      Status   @default(OPEN)
+  category    Category @default(OTHER)
+  duplicateOf String?
+  bumpCount   Int      @default(1)
+  reportedBy  String
+  telegramId  String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+enum Status {
+  OPEN
+  IN_PROGRESS
+  DUPLICATE
+  RESOLVED
+}
+
+enum Category {
+  CRASH
+  LAG
+  VISUAL
+  GAMEPLAY
+  OTHER
+}
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  passwordHash String
+  role         Role     @default(MODERATOR)
+  createdAt    DateTime @default(now())
+}
+
+enum Role {
+  ADMIN
+  MODERATOR
+}
+
+model Moderator {
+  id         String   @id @default(uuid())
+  telegramId String   @unique
+  name       String?
+  createdAt  DateTime @default(now())
+}
