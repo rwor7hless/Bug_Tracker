@@ -1,6 +1,7 @@
 import { Context } from "telegraf";
 import db from "../../db.js";
 import { formatCategory } from "../categorize.js";
+import { embed, vectorToSql } from "../../embeddings.js";
 
 type Step =
   | "category"
@@ -42,38 +43,26 @@ function catKb() {
   };
 }
 
-// --- Fuzzy duplicate detection ---
-function tokenize(text: string): Set<string> {
-  return new Set(
-    text
-      .toLowerCase()
-      .replace(/[^\wа-яёa-z0-9\s]/gi, " ")
-      .split(/\s+/)
-      .filter((w) => w.length > 3)
-  );
-}
-
-function jaccardSim(a: string, b: string): number {
-  const ta = tokenize(a);
-  const tb = tokenize(b);
-  let inter = 0;
-  for (const t of ta) if (tb.has(t)) inter++;
-  const union = new Set([...ta, ...tb]).size;
-  return union > 0 ? inter / union : 0;
-}
-
-async function findSimilar(description: string, category: string) {
-  const openTickets = await db.ticket.findMany({
-    where: { status: { in: ["OPEN", "IN_PROGRESS"] }, category: category as any },
-    orderBy: { bumpCount: "desc" },
-    take: 200,
-  });
-  return openTickets
-    .map((t) => ({ ticket: t, score: jaccardSim(description, t.description) }))
-    .filter((x) => x.score >= 0.2)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5)
-    .map((x) => x.ticket);
+// --- Vector duplicate detection ---
+async function findSimilar(text: string, category: string) {
+  try {
+    const vec = await embed(text, "query");
+    const vecSql = vectorToSql(vec);
+    const rows = await db.$queryRawUnsafe<Array<{ id: string; similarity: number }>>(`
+      SELECT id, 1 - (embedding <=> '${vecSql}'::vector) AS similarity
+      FROM "Ticket"
+      WHERE status IN ('OPEN', 'IN_PROGRESS')
+        AND category = '${category}'
+        AND embedding IS NOT NULL
+      ORDER BY embedding <=> '${vecSql}'::vector
+      LIMIT 5
+    `);
+    const ids = rows.filter((r) => r.similarity >= 0.75).map((r) => r.id);
+    if (!ids.length) return [];
+    return db.ticket.findMany({ where: { id: { in: ids } }, orderBy: { bumpCount: "desc" } });
+  } catch {
+    return [];
+  }
 }
 
 // --- Session helpers ---
@@ -428,6 +417,12 @@ async function submitTicket(ctx: Context, title: string | undefined, description
   const ticket = await db.ticket.create({
     data: { title, description, crashReport, reportedBy, category: category as any, telegramId },
   });
+  // Generate and store embedding asynchronously (don't block reply)
+  const embText = [title, description].filter(Boolean).join(" ");
+  embed(embText, "passage").then((vec) => {
+    const vecSql = vectorToSql(vec);
+    db.$executeRawUnsafe(`UPDATE "Ticket" SET embedding = '${vecSql}'::vector WHERE id = '${ticket.id}'`).catch(() => {});
+  }).catch(() => {});
   const catFormatted = formatCategory(category as any);
   const logType = crashReport
     ? crashReport.startsWith("http") ? "ссылка" : crashReport.startsWith("[Файл") ? "файл" : "текст"

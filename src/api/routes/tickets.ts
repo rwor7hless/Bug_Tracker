@@ -1,7 +1,9 @@
 import { FastifyInstance } from "fastify";
 import { requireAuth } from "../middleware/auth.js";
 import db from "../../db.js";
-import { Status } from "@prisma/client";
+import { embed, vectorToSql } from "../../embeddings.js";
+
+const VALID_STATUSES = ["OPEN", "IN_PROGRESS", "DUPLICATE", "RESOLVED"];
 
 async function notifyModerators(ticketId: string, message: string, excludeTelegramId?: string | null) {
   const { getBot } = await import("../../bot/botInstance.js");
@@ -20,33 +22,47 @@ export async function ticketRoutes(app: FastifyInstance) {
   }>("/api/tickets", { preHandler: requireAuth }, async (req) => {
     const { status, sort, search } = req.query;
 
-    const where: any = {};
-    if (status && Object.values(Status).includes(status as Status)) {
-      where.status = status as Status;
-    }
-    if (search) {
+    // If search query provided — use vector similarity search
+    if (search?.trim()) {
+      const statusFilter = status && VALID_STATUSES.includes(status) ? status : null;
+
+      try {
+        const vec = await embed(search.trim(), "query");
+        const vecSql = vectorToSql(vec);
+        const statusClause = statusFilter ? `AND status = '${statusFilter}'` : "";
+        // Return tickets ordered by cosine similarity, threshold 0.55
+        const rows = await db.$queryRawUnsafe<any[]>(`
+          SELECT *, 1 - (embedding <=> '${vecSql}'::vector) AS _sim
+          FROM "Ticket"
+          WHERE embedding IS NOT NULL ${statusClause}
+            AND 1 - (embedding <=> '${vecSql}'::vector) >= 0.55
+          ORDER BY embedding <=> '${vecSql}'::vector
+          LIMIT 50
+        `);
+        // Remove internal _sim field before returning
+        return rows.map(({ _sim: _s, ...t }: { _sim: number; [k: string]: unknown }) => t);
+      } catch {
+        // pgvector not available — fall back to token search
+      }
+
+      // Fallback: token OR search
       const STOP_WORDS = new Set(["у", "в", "с", "к", "и", "а", "но", "на", "по", "за", "из", "от", "до", "об", "со", "не", "ни", "то", "же", "ли", "бы"]);
       const tokens = search.trim().toLowerCase().split(/\s+/).filter((t: string) => t.length >= 2 && !STOP_WORDS.has(t));
-      if (tokens.length === 0) {
-        // fallback: use raw search string
-        where.OR = [
-          { title: { contains: search, mode: "insensitive" } },
-          { description: { contains: search, mode: "insensitive" } },
-          { crashReport: { contains: search, mode: "insensitive" } },
-        ];
-      } else {
-        // Match tickets containing ANY of the tokens (OR across all tokens + fields)
-        where.OR = tokens.flatMap((token: string) => [
-          { title: { contains: token, mode: "insensitive" } },
-          { description: { contains: token, mode: "insensitive" } },
-          { crashReport: { contains: token, mode: "insensitive" } },
-        ]);
-      }
+      const where: any = {};
+      if (statusFilter) where.status = statusFilter;
+      where.OR = (tokens.length ? tokens : [search]).flatMap((token: string) => [
+        { title: { contains: token, mode: "insensitive" } },
+        { description: { contains: token, mode: "insensitive" } },
+        { crashReport: { contains: token, mode: "insensitive" } },
+      ]);
+      const orderBy: any = sort === "bumps" ? { bumpCount: "desc" } : { createdAt: "desc" };
+      return db.ticket.findMany({ where, orderBy });
     }
 
-    const orderBy: any =
-      sort === "bumps" ? { bumpCount: "desc" } : { createdAt: "desc" };
-
+    // No search — normal filter
+    const where: any = {};
+    if (status && VALID_STATUSES.includes(status)) where.status = status;
+    const orderBy: any = sort === "bumps" ? { bumpCount: "desc" } : { createdAt: "desc" };
     return db.ticket.findMany({ where, orderBy });
   });
 
@@ -68,7 +84,7 @@ export async function ticketRoutes(app: FastifyInstance) {
     const byCategory: Record<string, number> = {};
     for (const c of byCategoryRaw) byCategory[c.category] = c._count.id;
 
-    const total = byStatusRaw.reduce((a, b) => a + b._count.id, 0);
+    const total = byStatusRaw.reduce((a: number, b: any) => a + b._count.id, 0);
 
     return { total, byStatus, byCategory, recentResolved };
   });
@@ -83,9 +99,18 @@ export async function ticketRoutes(app: FastifyInstance) {
       if (!description)
         return reply.code(400).send({ error: "description required" });
 
-      return db.ticket.create({
+      const ticket = await db.ticket.create({
         data: { title, description, crashReport, reportedBy, ...(category ? { category: category as any } : {}) },
       });
+
+      // Generate embedding asynchronously
+      const embText = [title, description].filter(Boolean).join(" ");
+      embed(embText, "passage").then((vec) => {
+        const vecSql = vectorToSql(vec);
+        db.$executeRawUnsafe(`UPDATE "Ticket" SET embedding = '${vecSql}'::vector WHERE id = '${ticket.id}'`).catch(() => {});
+      }).catch(() => {});
+
+      return ticket;
     }
   );
 
@@ -97,8 +122,8 @@ export async function ticketRoutes(app: FastifyInstance) {
     const { status, duplicateOf, resolveComment } = req.body;
 
     const data: any = {};
-    if (status && Object.values(Status).includes(status as Status)) {
-      data.status = status as Status;
+    if (status && VALID_STATUSES.includes(status)) {
+      data.status = status;
     }
     if (duplicateOf !== undefined) data.duplicateOf = duplicateOf;
     if (resolveComment !== undefined) data.resolveComment = resolveComment;
@@ -106,7 +131,6 @@ export async function ticketRoutes(app: FastifyInstance) {
     const ticket = await db.ticket.update({ where: { id }, data }).catch(() => null);
     if (!ticket) return reply.code(404).send({ error: "Not found" });
 
-    // Notify all moderators on status change
     const ticketTitle = (ticket as any).title || ticket.description.slice(0, 60);
     if (data.status === "RESOLVED") {
       const comment = resolveComment?.trim();
