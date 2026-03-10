@@ -13,7 +13,8 @@ type Step =
   | "crash_text"
   | "crash_file"
   | "bump_id"
-  | "similar_check";
+  | "similar_check"
+  | "search_query";
 
 type Session = {
   step?: Step;
@@ -22,6 +23,8 @@ type Session = {
   category?: string;
   pendingCrashReport?: string;
   similarIds?: string[];
+  listPage?: number;
+  listTickets?: string; // JSON-serialized ticket ids for pagination
 };
 
 const CATS = [
@@ -73,6 +76,51 @@ function clearSession(s: Session) {
   s.category = undefined;
   s.pendingCrashReport = undefined;
   s.similarIds = undefined;
+  s.listPage = undefined;
+  s.listTickets = undefined;
+}
+
+const LIST_PAGE_SIZE = 5;
+
+async function showTicketList(ctx: Context, tickets: any[], page: number, title: string) {
+  const total = tickets.length;
+  const totalPages = Math.max(1, Math.ceil(total / LIST_PAGE_SIZE));
+  const pageTickets = tickets.slice(page * LIST_PAGE_SIZE, (page + 1) * LIST_PAGE_SIZE);
+  const CAT_ORDER = ["CRASH", "LAG", "VISUAL", "GAMEPLAY", "OTHER"];
+
+  const groups: Record<string, typeof pageTickets> = {};
+  for (const t of pageTickets) {
+    if (!groups[t.category]) groups[t.category] = [];
+    groups[t.category].push(t);
+  }
+  const sections: string[] = [];
+  for (const cat of CAT_ORDER) {
+    const list = groups[cat];
+    if (!list?.length) continue;
+    const header = formatCategory(cat as any);
+    const rows = list.map((t: any) => {
+      const mark = t.status === "IN_PROGRESS" ? " [в работе]" : "";
+      const label = t.title || t.description.slice(0, 50);
+      const text = label.length > 50 ? label.slice(0, 50) + "…" : label;
+      return `  <code>${t.id.slice(0, 8)}</code>${mark} bumps:${t.bumpCount} — ${text}`;
+    });
+    sections.push(`<b>${header}</b>\n` + rows.join("\n"));
+  }
+
+  const nav: any[] = [];
+  if (totalPages > 1) {
+    const row: any[] = [];
+    if (page > 0) row.push({ text: "← Назад", callback_data: `list_page_${page - 1}` });
+    row.push({ text: `${page + 1}/${totalPages}`, callback_data: "noop" });
+    if (page < totalPages - 1) row.push({ text: "Вперёд →", callback_data: `list_page_${page + 1}` });
+    nav.push(row);
+  }
+  nav.push([{ text: "В меню", callback_data: "menu_back" }]);
+
+  return ctx.reply(
+    `<b>${title}</b> (${total})\n\n` + (sections.join("\n\n") || "Нет тикетов."),
+    { parse_mode: "HTML", reply_markup: { inline_keyboard: nav } }
+  );
 }
 
 async function checkSimilarAndProceed(ctx: Context, s: Session) {
@@ -125,8 +173,8 @@ export async function showMainMenu(ctx: Context) {
       reply_markup: {
         inline_keyboard: [
           [{ text: "Создать баг-репорт", callback_data: "menu_report" }],
-          [{ text: "Список открытых багов", callback_data: "menu_list" }],
-          [{ text: "Мои тикеты", callback_data: "menu_mytickets" }],
+          [{ text: "Список открытых багов", callback_data: "menu_list_0" }],
+          [{ text: "Поиск по тикетам", callback_data: "menu_search" }],
           [{ text: "Bump тикета", callback_data: "menu_bump" }],
           [{ text: "Пароль для панели", callback_data: "menu_password" }],
         ],
@@ -185,6 +233,30 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
     return true;
   }
 
+  if (s.step === "search_query") {
+    s.step = undefined;
+    const allTickets = await db.ticket.findMany({
+      where: { status: { in: ["OPEN", "IN_PROGRESS"] as any[] } },
+      orderBy: { bumpCount: "desc" },
+    });
+    const tokens = text.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 2);
+    const results = allTickets.filter((t: any) => {
+      const haystack = [(t.title || ""), t.description].join(" ").toLowerCase();
+      return tokens.some((tok: string) => haystack.includes(tok));
+    });
+    if (!results.length) {
+      await ctx.reply("По запросу <b>" + text + "</b> ничего не найдено.", {
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [[{ text: "В меню", callback_data: "menu_back" }]] },
+      });
+      return true;
+    }
+    s.listTickets = JSON.stringify(results.map((t: any) => t.id));
+    s.listPage = 0;
+    await showTicketList(ctx, results, 0, `Результаты: «${text}»`);
+    return true;
+  }
+
   if (s.step === "bump_id") {
     const ticket = await db.ticket.findFirst({
       where: text.length < 36 ? { id: { startsWith: text } } : { id: text },
@@ -230,6 +302,7 @@ export async function reportCallbackHandler(ctx: Context) {
     return;
   }
 
+  if (data === "noop") return;
   if (data === "menu_back") return showMainMenu(ctx);
 
   if (data === "menu_report") {
@@ -237,7 +310,8 @@ export async function reportCallbackHandler(ctx: Context) {
     return ctx.reply("<b>Новый баг-репорт</b>\n\nВыбери категорию:", { parse_mode: "HTML", reply_markup: catKb() });
   }
 
-  if (data === "menu_list") {
+  if (data.startsWith("menu_list_")) {
+    const page = parseInt(data.slice("menu_list_".length)) || 0;
     const tickets = await db.ticket.findMany({
       where: { status: { in: ["OPEN", "IN_PROGRESS"] as any[] } },
       orderBy: { bumpCount: "desc" },
@@ -248,63 +322,29 @@ export async function reportCallbackHandler(ctx: Context) {
       });
       return;
     }
-
-    // Group by category, already sorted by bumps
-    const CAT_ORDER = ["CRASH", "LAG", "VISUAL", "GAMEPLAY", "OTHER"];
-    const groups: Record<string, typeof tickets> = {};
-    for (const t of tickets) {
-      if (!groups[t.category]) groups[t.category] = [];
-      groups[t.category].push(t);
-    }
-
-    const sections: string[] = [];
-    for (const cat of CAT_ORDER) {
-      const list = groups[cat];
-      if (!list?.length) continue;
-      const header = formatCategory(cat as any);
-      const rows = list.map((t) => {
-        const mark = (t.status as string) === "IN_PROGRESS" ? " [в работе]" : "";
-        const label = (t as any).title || t.description.slice(0, 50);
-        const text = label.length > 50 ? label.slice(0, 50) + "…" : label;
-        return `  <code>${t.id.slice(0, 8)}</code>${mark} bumps:${t.bumpCount} — ${text}`;
-      });
-      sections.push(`<b>${header}</b>\n` + rows.join("\n"));
-    }
-
-    return ctx.reply("<b>Открытые баги:</b>\n\n" + sections.join("\n\n"), {
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: [[{ text: "В меню", callback_data: "menu_back" }]] },
-    });
+    s.listTickets = JSON.stringify(tickets.map((t) => t.id));
+    s.listPage = page;
+    return showTicketList(ctx, tickets, page, "Открытые баги");
   }
 
-  if (data === "menu_mytickets") {
-    const telegramId = String(ctx.from?.id);
+  if (data.startsWith("list_page_")) {
+    const page = parseInt(data.slice("list_page_".length)) || 0;
+    const ids: string[] = s.listTickets ? JSON.parse(s.listTickets) : [];
+    if (!ids.length) return showMainMenu(ctx);
     const tickets = await db.ticket.findMany({
-      where: { telegramId },
-      orderBy: { createdAt: "desc" },
-      take: 15,
+      where: { id: { in: ids } },
+      orderBy: { bumpCount: "desc" },
     });
-    if (!tickets.length) {
-      await ctx.reply("У тебя пока нет тикетов.", {
-        reply_markup: { inline_keyboard: [[{ text: "В меню", callback_data: "menu_back" }]] },
-      });
-      return;
-    }
-    const statusLabel: Record<string, string> = {
-      OPEN: "[открыт]",
-      IN_PROGRESS: "[в работе]",
-      RESOLVED: "[решён]",
-      DUPLICATE: "[дубликат]",
-    };
-    const lines = tickets.map((t) => {
-      const st = statusLabel[t.status] ?? t.status;
-      const label = (t as any).title || t.description.slice(0, 55);
-      const text = label.length > 55 ? label.slice(0, 55) + "…" : label;
-      return `${st} <code>${t.id.slice(0, 8)}</code> bumps: ${t.bumpCount}\n   ${text}`;
-    });
-    return ctx.reply("<b>Мои тикеты:</b>\n\n" + lines.join("\n\n"), {
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: [[{ text: "В меню", callback_data: "menu_back" }]] },
+    // Preserve original order
+    const ordered = ids.map(id => tickets.find(t => t.id === id)).filter(Boolean) as typeof tickets;
+    s.listPage = page;
+    return showTicketList(ctx, ordered, page, "Открытые баги");
+  }
+
+  if (data === "menu_search") {
+    s.step = "search_query";
+    return ctx.reply("Введи поисковый запрос:", {
+      reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
     });
   }
 

@@ -24,13 +24,15 @@ const CATEGORIES = [
   { value: "OTHER",    label: "Другое" },
 ] as const;
 
-const ADMIN_STATUSES = ["OPEN", "IN_PROGRESS", "DUPLICATE", "RESOLVED"] as const;
+const ALL_STATUSES = ["OPEN", "IN_PROGRESS", "DUPLICATE", "RESOLVED"] as const;
 const statusLabel: Record<string, string> = {
   OPEN: "Открытые",
   IN_PROGRESS: "В работе",
   DUPLICATE: "Дубликаты",
   RESOLVED: "Решённые",
 };
+
+const PAGE_SIZE = 10;
 
 export default function Tickets() {
   const { user } = useAuth();
@@ -41,6 +43,7 @@ export default function Tickets() {
   const [sort, setSort] = useState("date");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
 
   const [showCreate, setShowCreate] = useState(false);
   const [newCategory, setNewCategory] = useState("OTHER");
@@ -59,6 +62,7 @@ export default function Tickets() {
     setLoading(false);
   }
 
+  useEffect(() => { setPage(1); }, [status, sort, search]);
   useEffect(() => { load(); }, [status, sort, search]);
 
   async function createTicket() {
@@ -130,13 +134,14 @@ export default function Tickets() {
     load();
   }
 
-  const modStatuses = ["OPEN", "IN_PROGRESS"] as const;
+  const totalPages = Math.max(1, Math.ceil(tickets.length / PAGE_SIZE));
+  const pageTickets = tickets.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
   return (
     <div>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 24, alignItems: "center" }}>
         <div style={{ display: "flex", gap: 4 }}>
-          {(isAdmin ? ADMIN_STATUSES : modStatuses).map((s) => (
+          {ALL_STATUSES.map((s) => (
             <button
               key={s}
               className={status === s ? "btn-primary" : "btn-ghost"}
@@ -175,7 +180,7 @@ export default function Tickets() {
       {!loading && tickets.length === 0 && <p style={{ color: "var(--text-3)", fontSize: 14 }}>Тикетов нет.</p>}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {tickets.map((t) => (
+        {pageTickets.map((t) => (
           <TicketCard
             key={t.id}
             ticket={t}
@@ -189,6 +194,14 @@ export default function Tickets() {
           />
         ))}
       </div>
+
+      {totalPages > 1 && (
+        <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 20, alignItems: "center" }}>
+          <button className="btn-ghost" onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} style={{ padding: "5px 12px" }}>←</button>
+          <span style={{ fontSize: 13, color: "var(--text-2)" }}>{page} / {totalPages}</span>
+          <button className="btn-ghost" onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} style={{ padding: "5px 12px" }}>→</button>
+        </div>
+      )}
 
       {showCreate && (
         <div
