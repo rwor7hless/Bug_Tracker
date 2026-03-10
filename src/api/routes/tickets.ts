@@ -3,13 +3,15 @@ import { requireAuth } from "../middleware/auth.js";
 import db from "../../db.js";
 import { Status } from "@prisma/client";
 
-async function notifyOwner(ticketId: string, message: string) {
+async function notifyModerators(ticketId: string, message: string, excludeTelegramId?: string | null) {
   const { getBot } = await import("../../bot/botInstance.js");
   const bot = getBot();
   if (!bot) return;
-  const ticket = await db.ticket.findUnique({ where: { id: ticketId }, select: { telegramId: true } });
-  if (!ticket?.telegramId) return;
-  bot.telegram.sendMessage(ticket.telegramId, message, { parse_mode: "HTML" }).catch(() => {});
+  const moderators = await db.moderator.findMany({ select: { telegramId: true } });
+  for (const mod of moderators) {
+    if (excludeTelegramId && mod.telegramId === excludeTelegramId) continue;
+    bot.telegram.sendMessage(mod.telegramId, message, { parse_mode: "HTML" }).catch(() => {});
+  }
 }
 
 export async function ticketRoutes(app: FastifyInstance) {
@@ -24,6 +26,7 @@ export async function ticketRoutes(app: FastifyInstance) {
     }
     if (search) {
       where.OR = [
+        { title: { contains: search, mode: "insensitive" } },
         { description: { contains: search, mode: "insensitive" } },
         { crashReport: { contains: search, mode: "insensitive" } },
       ];
@@ -58,52 +61,54 @@ export async function ticketRoutes(app: FastifyInstance) {
     return { total, byStatus, byCategory, recentResolved };
   });
 
-  app.post<{ Body: { description: string; crashReport?: string; category?: string; reportedBy?: string } }>(
+  app.post<{ Body: { title?: string; description: string; crashReport?: string; category?: string; reportedBy?: string } }>(
     "/api/tickets",
     { preHandler: requireAuth },
     async (req, reply) => {
-      const { description, crashReport, category } = req.body;
+      const { title, description, crashReport, category } = req.body;
       const jwtUser = (req as any).user as { username: string } | undefined;
       const reportedBy = req.body.reportedBy || jwtUser?.username || "web";
       if (!description)
         return reply.code(400).send({ error: "description required" });
 
       return db.ticket.create({
-        data: { description, crashReport, reportedBy, ...(category ? { category: category as any } : {}) },
+        data: { title, description, crashReport, reportedBy, ...(category ? { category: category as any } : {}) },
       });
     }
   );
 
   app.patch<{
     Params: { id: string };
-    Body: { status?: string; duplicateOf?: string };
+    Body: { status?: string; duplicateOf?: string; resolveComment?: string };
   }>("/api/tickets/:id", { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params;
-    const { status, duplicateOf } = req.body;
+    const { status, duplicateOf, resolveComment } = req.body;
 
     const data: any = {};
     if (status && Object.values(Status).includes(status as Status)) {
       data.status = status as Status;
     }
     if (duplicateOf !== undefined) data.duplicateOf = duplicateOf;
+    if (resolveComment !== undefined) data.resolveComment = resolveComment;
 
     const ticket = await db.ticket.update({ where: { id }, data }).catch(() => null);
     if (!ticket) return reply.code(404).send({ error: "Not found" });
 
-    // Notify ticket owner on status change
+    // Notify all moderators on status change
+    const ticketTitle = (ticket as any).title || ticket.description.slice(0, 60);
     if (data.status === "RESOLVED") {
-      await notifyOwner(
-        id,
+      const comment = resolveComment?.trim();
+      const resolveMsg =
         `Тикет <code>${id.slice(0, 8)}</code> закрыт.\n\n` +
-        `${ticket.description.slice(0, 100)}\n\n` +
-        `Спасибо за репорт.`
-      );
+        `<b>${ticketTitle}</b>` +
+        (comment ? `\n\n<b>Комментарий:</b> ${comment}` : "") +
+        `\n\nСпасибо за репорт.`;
+      await notifyModerators(id, resolveMsg);
     } else if (data.status === "IN_PROGRESS") {
-      await notifyOwner(
-        id,
+      const inProgressMsg =
         `Тикет <code>${id.slice(0, 8)}</code> взят в работу.\n\n` +
-        `${ticket.description.slice(0, 100)}`
-      );
+        `<b>${ticketTitle}</b>`;
+      await notifyModerators(id, inProgressMsg);
     }
 
     return ticket;

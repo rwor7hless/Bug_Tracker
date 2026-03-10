@@ -4,8 +4,10 @@ import { useAuth } from "../components/AuthContext";
 
 interface Ticket {
   id: string;
+  title?: string | null;
   description: string;
   crashReport?: string | null;
+  resolveComment?: string | null;
   status: "OPEN" | "IN_PROGRESS" | "DUPLICATE" | "RESOLVED";
   category: string;
   duplicateOf?: string | null;
@@ -42,6 +44,7 @@ export default function Tickets() {
 
   const [showCreate, setShowCreate] = useState(false);
   const [newCategory, setNewCategory] = useState("OTHER");
+  const [newTitle, setNewTitle] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [newCrash, setNewCrash] = useState("");
   const [creating, setCreating] = useState(false);
@@ -65,6 +68,7 @@ export default function Tickets() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        title: newTitle.trim() || undefined,
         description: newDescription.trim(),
         crashReport: newCrash.trim() || undefined,
         category: newCategory,
@@ -72,6 +76,7 @@ export default function Tickets() {
     });
     setCreating(false);
     setShowCreate(false);
+    setNewTitle("");
     setNewDescription("");
     setNewCrash("");
     setNewCategory("OTHER");
@@ -92,11 +97,11 @@ export default function Tickets() {
     load();
   }
 
-  async function resolve(id: string) {
+  async function resolve(id: string, resolveComment?: string) {
     await fetch(`/api/tickets/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "RESOLVED" }),
+      body: JSON.stringify({ status: "RESOLVED", ...(resolveComment ? { resolveComment } : {}) }),
     });
     load();
   }
@@ -210,6 +215,19 @@ export default function Tickets() {
                   </button>
                 ))}
               </div>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>
+                Название <span style={{ color: "var(--text-3)" }}>(необязательно)</span>
+              </label>
+              <input
+                placeholder="Краткое название бага…"
+                value={newTitle}
+                onChange={(e) => setNewTitle(e.target.value)}
+                maxLength={100}
+                style={{ fontSize: 13 }}
+              />
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

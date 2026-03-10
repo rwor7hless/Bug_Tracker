@@ -8,8 +8,6 @@ services:
       POSTGRES_DB: bugreport
       POSTGRES_USER: bugreport
       POSTGRES_PASSWORD: bugreport
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

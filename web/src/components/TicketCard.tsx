@@ -2,8 +2,10 @@ import { useState } from "react";
 
 interface Ticket {
   id: string;
+  title?: string | null;
   description: string;
   crashReport?: string | null;
+  resolveComment?: string | null;
   status: "OPEN" | "IN_PROGRESS" | "DUPLICATE" | "RESOLVED";
   category: string;
   duplicateOf?: string | null;
@@ -17,7 +19,7 @@ interface Props {
   isAdmin: boolean;
   onBump: (id: string) => void;
   onInProgress: (id: string) => void;
-  onResolve: (id: string) => void;
+  onResolve: (id: string, comment?: string) => void;
   onReopen: (id: string) => void;
   onDuplicate: (id: string, originalId: string) => void;
   onDelete: (id: string) => void;
@@ -39,9 +41,12 @@ const statusMeta: Record<string, { cls: string; text: string }> = {
 };
 
 export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onResolve, onReopen, onDuplicate, onDelete }: Props) {
+  const [showDetail, setShowDetail] = useState(false);
   const [showCrash, setShowCrash] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
   const [dupId, setDupId] = useState("");
+  const [resolvingComment, setResolvingComment] = useState(false);
+  const [resolveComment, setResolveComment] = useState("");
 
   const date = new Date(ticket.createdAt).toLocaleString("ru-RU", {
     day: "2-digit", month: "2-digit", year: "2-digit",
@@ -64,176 +69,265 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
   }
 
   const { cls: statusClass, text: statusText } = statusMeta[ticket.status] ?? { cls: "badge-open", text: ticket.status };
+  const displayTitle = ticket.title || ticket.description.slice(0, 80);
 
   return (
-    <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ fontSize: 14, lineHeight: 1.6, color: "var(--text)" }}>{ticket.description}</p>
-          {ticket.duplicateOf && (
-            <p style={{ fontSize: 12, color: "var(--text-3)", marginTop: 4 }}>
-              Дубликат тикета #{ticket.duplicateOf.slice(0, 8)}
+    <>
+      <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: ticket.title ? 4 : 0 }}>
+              {displayTitle}
             </p>
+            {ticket.title && (
+              <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
+                {ticket.description.length > 120 ? ticket.description.slice(0, 120) + "…" : ticket.description}
+              </p>
+            )}
+            {ticket.duplicateOf && (
+              <p style={{ fontSize: 12, color: "var(--text-3)", marginTop: 4 }}>
+                Дубликат тикета #{ticket.duplicateOf.slice(0, 8)}
+              </p>
+            )}
+            {ticket.resolveComment && (
+              <p style={{ fontSize: 12, color: "var(--text-2)", marginTop: 6, padding: "6px 10px", background: "var(--surface2)", borderRadius: "var(--radius)", borderLeft: "3px solid var(--accent)" }}>
+                <span style={{ color: "var(--text-3)" }}>Решение: </span>{ticket.resolveComment}
+              </p>
+            )}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, flexShrink: 0 }}>
+            <span className={`badge ${statusClass}`}>{statusText}</span>
+            <span style={{ fontSize: 12, color: "var(--text-3)" }}>{categoryLabel[ticket.category] ?? ticket.category}</span>
+          </div>
+        </div>
+
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
+          flexWrap: "wrap",
+          fontSize: 12,
+          color: "var(--text-3)",
+          borderTop: "1px solid var(--border)",
+          paddingTop: 10,
+        }}>
+          <span style={{ fontFamily: "monospace", color: "var(--text-2)" }}>#{ticket.id.slice(0, 8)}</span>
+          <span>·</span>
+          <span>{ticket.reportedBy}</span>
+          <span>·</span>
+          <span>{date}</span>
+          <span style={{
+            marginLeft: "auto",
+            background: "var(--surface2)",
+            borderRadius: 4,
+            padding: "2px 8px",
+            color: "var(--text-2)",
+            fontSize: 12,
+          }}>
+            ↑ {ticket.bumpCount}
+          </span>
+        </div>
+
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => setShowDetail(true)}>
+            Подробнее
+          </button>
+          {ticket.status !== "RESOLVED" && (
+            <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => onBump(ticket.id)}>
+              ↑ Bump
+            </button>
+          )}
+          {isAdmin && ticket.status === "OPEN" && (
+            <>
+              <button
+                className="btn-ghost"
+                style={{ fontSize: 12, color: "#3b82f6", borderColor: "#3b82f6" }}
+                onClick={() => onInProgress(ticket.id)}
+              >
+                В работу
+              </button>
+              <button className="btn-success" style={{ fontSize: 12 }} onClick={() => setResolvingComment(true)}>
+                Решено
+              </button>
+              <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => setDuplicating((v) => !v)}>
+                Дубликат
+              </button>
+            </>
+          )}
+          {isAdmin && ticket.status === "IN_PROGRESS" && (
+            <>
+              <button className="btn-success" style={{ fontSize: 12 }} onClick={() => setResolvingComment(true)}>
+                Решено
+              </button>
+              <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => onReopen(ticket.id)}>
+                Вернуть в открытые
+              </button>
+            </>
+          )}
+          {isAdmin && (ticket.status === "RESOLVED" || ticket.status === "DUPLICATE") && (
+            <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => onReopen(ticket.id)}>
+              Вернуть в активные
+            </button>
+          )}
+          {isAdmin && (
+            <button className="btn-danger" style={{ fontSize: 12 }} onClick={() => onDelete(ticket.id)}>
+              Удалить
+            </button>
           )}
         </div>
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 5, flexShrink: 0 }}>
-          <span className={`badge ${statusClass}`}>{statusText}</span>
-          <span style={{ fontSize: 12, color: "var(--text-3)" }}>{categoryLabel[ticket.category] ?? ticket.category}</span>
-        </div>
+
+        {resolvingComment && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <label style={{ fontSize: 12, color: "var(--text-2)" }}>Комментарий к решению <span style={{ color: "var(--text-3)" }}>(необязательно)</span></label>
+            <textarea
+              placeholder="Опиши как решился баг или что нужно сделать игроку…"
+              value={resolveComment}
+              onChange={(e) => setResolveComment(e.target.value)}
+              rows={2}
+              style={{ fontSize: 13 }}
+            />
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                className="btn-success"
+                style={{ fontSize: 13 }}
+                onClick={() => {
+                  onResolve(ticket.id, resolveComment.trim() || undefined);
+                  setResolvingComment(false);
+                  setResolveComment("");
+                }}
+              >
+                Закрыть тикет
+              </button>
+              <button className="btn-ghost" style={{ fontSize: 13 }} onClick={() => { setResolvingComment(false); setResolveComment(""); }}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        )}
+
+        {duplicating && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              placeholder="ID оригинального тикета"
+              value={dupId}
+              onChange={(e) => setDupId(e.target.value)}
+              style={{ flex: 1, fontSize: 13 }}
+            />
+            <button
+              className="btn-primary"
+              style={{ fontSize: 13 }}
+              onClick={() => {
+                if (dupId.trim()) {
+                  onDuplicate(ticket.id, dupId.trim());
+                  setDuplicating(false);
+                  setDupId("");
+                }
+              }}
+            >
+              OK
+            </button>
+          </div>
+        )}
       </div>
 
-      {ticket.crashReport && (
-        <div>
-          {isLink ? (
-            <a
-              href={ticket.crashReport}
-              target="_blank"
-              rel="noreferrer"
-              style={{ fontSize: 13, color: "var(--accent)", display: "inline-flex", alignItems: "center", gap: 4 }}
-            >
-              🔗 Открыть лог
-            </a>
-          ) : isFile ? (
-            <span style={{ fontSize: 13, color: "var(--text-3)" }}>{ticket.crashReport}</span>
-          ) : (
-            <div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <button
-                  className="btn-ghost"
-                  style={{ fontSize: 12, padding: "4px 10px" }}
-                  onClick={() => setShowCrash((v) => !v)}
-                >
-                  {showCrash ? "Скрыть лог" : "Показать лог"}
-                </button>
-                {isAdmin && (
-                  <button
-                    className="btn-ghost"
-                    style={{ fontSize: 12, padding: "4px 10px" }}
-                    onClick={downloadLog}
-                  >
-                    ↓ Скачать .txt
-                  </button>
-                )}
+      {showDetail && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => { if (e.target === e.currentTarget) setShowDetail(false); }}
+        >
+          <div className="modal" style={{ maxWidth: 640 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+              <span className="modal-title">{ticket.title || "Тикет #" + ticket.id.slice(0, 8)}</span>
+              <button className="btn-ghost" onClick={() => setShowDetail(false)} style={{ padding: "4px 10px" }}>✕</button>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+              <span className={`badge ${statusClass}`}>{statusText}</span>
+              <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>{categoryLabel[ticket.category] ?? ticket.category}</span>
+              <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>#{ticket.id.slice(0, 8)}</span>
+              <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>{ticket.reportedBy} · {date}</span>
+              <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>↑ {ticket.bumpCount}</span>
+            </div>
+
+            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div>
+                <p style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Описание</p>
+                <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{ticket.description}</p>
               </div>
-              {showCrash && (
-                <pre style={{
-                  marginTop: 10,
-                  background: "#111",
-                  border: "1px solid var(--border)",
-                  borderRadius: "var(--radius)",
-                  padding: 12,
-                  fontSize: 11,
-                  lineHeight: 1.6,
-                  overflowX: "auto",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all",
-                  maxHeight: 280,
-                  overflowY: "auto",
-                  color: "var(--text-2)",
-                }}>
-                  {ticket.crashReport}
-                </pre>
+
+              {ticket.crashReport && (
+                <div>
+                  <p style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Лог</p>
+                  {isLink ? (
+                    <a
+                      href={ticket.crashReport}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ fontSize: 13, color: "var(--accent)" }}
+                    >
+                      Открыть лог
+                    </a>
+                  ) : isFile ? (
+                    <span style={{ fontSize: 13, color: "var(--text-3)" }}>{ticket.crashReport}</span>
+                  ) : (
+                    <div>
+                      <div style={{ display: "flex", gap: 8, marginBottom: 6 }}>
+                        <button
+                          className="btn-ghost"
+                          style={{ fontSize: 12, padding: "4px 10px" }}
+                          onClick={() => setShowCrash((v) => !v)}
+                        >
+                          {showCrash ? "Скрыть лог" : "Показать лог"}
+                        </button>
+                        <button
+                          className="btn-ghost"
+                          style={{ fontSize: 12, padding: "4px 10px" }}
+                          onClick={downloadLog}
+                        >
+                          ↓ Скачать .txt
+                        </button>
+                      </div>
+                      {showCrash && (
+                        <pre style={{
+                          background: "#111",
+                          border: "1px solid var(--border)",
+                          borderRadius: "var(--radius)",
+                          padding: 12,
+                          fontSize: 11,
+                          lineHeight: 1.6,
+                          overflowX: "auto",
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-all",
+                          maxHeight: 280,
+                          overflowY: "auto",
+                          color: "var(--text-2)",
+                        }}>
+                          {ticket.crashReport}
+                        </pre>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {ticket.resolveComment && (
+                <div>
+                  <p style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Комментарий к решению</p>
+                  <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.7, padding: "8px 12px", background: "var(--surface2)", borderRadius: "var(--radius)", borderLeft: "3px solid var(--accent)" }}>
+                    {ticket.resolveComment}
+                  </p>
+                </div>
+              )}
+
+              {ticket.duplicateOf && (
+                <p style={{ fontSize: 12, color: "var(--text-3)" }}>
+                  Дубликат тикета #{ticket.duplicateOf.slice(0, 8)}
+                </p>
               )}
             </div>
-          )}
+          </div>
         </div>
       )}
-
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 6,
-        flexWrap: "wrap",
-        fontSize: 12,
-        color: "var(--text-3)",
-        borderTop: "1px solid var(--border)",
-        paddingTop: 10,
-      }}>
-        <span style={{ fontFamily: "monospace", color: "var(--text-2)" }}>#{ticket.id.slice(0, 8)}</span>
-        <span>·</span>
-        <span>{ticket.reportedBy}</span>
-        <span>·</span>
-        <span>{date}</span>
-        <span style={{
-          marginLeft: "auto",
-          background: "var(--surface2)",
-          borderRadius: 4,
-          padding: "2px 8px",
-          color: "var(--text-2)",
-          fontSize: 12,
-        }}>
-          ↑ {ticket.bumpCount}
-        </span>
-      </div>
-
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {ticket.status !== "RESOLVED" && (
-          <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => onBump(ticket.id)}>
-            ↑ Bump
-          </button>
-        )}
-        {isAdmin && ticket.status === "OPEN" && (
-          <>
-            <button
-              className="btn-ghost"
-              style={{ fontSize: 12, color: "#3b82f6", borderColor: "#3b82f6" }}
-              onClick={() => onInProgress(ticket.id)}
-            >
-              В работу
-            </button>
-            <button className="btn-success" style={{ fontSize: 12 }} onClick={() => onResolve(ticket.id)}>
-              Решено
-            </button>
-            <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => setDuplicating((v) => !v)}>
-              Дубликат
-            </button>
-          </>
-        )}
-        {isAdmin && ticket.status === "IN_PROGRESS" && (
-          <>
-            <button className="btn-success" style={{ fontSize: 12 }} onClick={() => onResolve(ticket.id)}>
-              Решено
-            </button>
-            <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => onReopen(ticket.id)}>
-              Вернуть в открытые
-            </button>
-          </>
-        )}
-        {isAdmin && (ticket.status === "RESOLVED" || ticket.status === "DUPLICATE") && (
-          <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => onReopen(ticket.id)}>
-            Вернуть в активные
-          </button>
-        )}
-        {isAdmin && (
-          <button className="btn-danger" style={{ fontSize: 12 }} onClick={() => onDelete(ticket.id)}>
-            Удалить
-          </button>
-        )}
-      </div>
-
-      {duplicating && (
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            placeholder="ID оригинального тикета"
-            value={dupId}
-            onChange={(e) => setDupId(e.target.value)}
-            style={{ flex: 1, fontSize: 13 }}
-          />
-          <button
-            className="btn-primary"
-            style={{ fontSize: 13 }}
-            onClick={() => {
-              if (dupId.trim()) {
-                onDuplicate(ticket.id, dupId.trim());
-                setDuplicating(false);
-                setDupId("");
-              }
-            }}
-          >
-            OK
-          </button>
-        </div>
-      )}
-    </div>
+    </>
   );
 }

@@ -4,6 +4,7 @@ import { formatCategory } from "../categorize.js";
 
 type Step =
   | "category"
+  | "title"
   | "description"
   | "crash_prompt"
   | "crash_type"
@@ -15,6 +16,7 @@ type Step =
 
 type Session = {
   step?: Step;
+  title?: string;
   description?: string;
   category?: string;
   pendingCrashReport?: string;
@@ -77,6 +79,7 @@ async function findSimilar(description: string, category: string) {
 // --- Session helpers ---
 function clearSession(s: Session) {
   s.step = undefined;
+  s.title = undefined;
   s.description = undefined;
   s.category = undefined;
   s.pendingCrashReport = undefined;
@@ -84,10 +87,10 @@ function clearSession(s: Session) {
 }
 
 async function checkSimilarAndProceed(ctx: Context, s: Session) {
-  const similar = await findSimilar(s.description!, s.category!);
+  const similar = await findSimilar(s.title ? s.title + " " + s.description! : s.description!, s.category!);
 
   if (!similar.length) {
-    await submitTicket(ctx, s.description!, s.category!, s.pendingCrashReport);
+    await submitTicket(ctx, s.title, s.description!, s.category!, s.pendingCrashReport);
     clearSession(s);
     return;
   }
@@ -97,16 +100,15 @@ async function checkSimilarAndProceed(ctx: Context, s: Session) {
 
   const lines = similar.map((t, i) => {
     const statusMark = t.status === "IN_PROGRESS" ? " [в работе]" : "";
-    const desc = t.description.length > 70 ? t.description.slice(0, 70) + "…" : t.description;
+    const label = (t as any).title || t.description.slice(0, 60);
+    const desc = label.length > 70 ? label.slice(0, 70) + "…" : label;
     return `${i + 1}.${statusMark} <code>${t.id.slice(0, 8)}</code> bumps: ${t.bumpCount}\n   ${desc}`;
   });
 
-  const buttons = similar.map((t, i) => [
-    {
-      text: `${i + 1}. ${t.description.slice(0, 28)}…`,
-      callback_data: `similar_bump_${t.id}`,
-    },
-  ]);
+  const buttons = similar.map((t, i) => {
+    const label = (t as any).title || t.description.slice(0, 28);
+    return [{ text: `${i + 1}. ${label.slice(0, 30)}`, callback_data: `similar_bump_${t.id}` }];
+  });
   buttons.push([{ text: "Подходящих нет — создать новый", callback_data: "similar_none" }]);
   buttons.push([{ text: "Отмена", callback_data: "menu_back" }]);
 
@@ -150,6 +152,19 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
   if (!c.session) c.session = {};
   const s = c.session as Session;
   const text: string = c.message?.text?.trim() || "";
+
+  if (s.step === "title") {
+    if (text.length > 100) {
+      await ctx.reply("Название слишком длинное. Максимум 100 символов. Попробуй ещё раз:");
+      return true;
+    }
+    s.title = text;
+    s.step = "description";
+    await ctx.reply("Название принято.\n\nТеперь опиши баг подробно: что произошло, как воспроизвести:", {
+      reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
+    });
+    return true;
+  }
 
   if (s.step === "description") {
     s.description = text;
@@ -260,8 +275,9 @@ export async function reportCallbackHandler(ctx: Context) {
       const header = formatCategory(cat as any);
       const rows = list.map((t) => {
         const mark = (t.status as string) === "IN_PROGRESS" ? " [в работе]" : "";
-        const desc = t.description.length > 50 ? t.description.slice(0, 50) + "…" : t.description;
-        return `  <code>${t.id.slice(0, 8)}</code>${mark} bumps:${t.bumpCount} — ${desc}`;
+        const label = (t as any).title || t.description.slice(0, 50);
+        const text = label.length > 50 ? label.slice(0, 50) + "…" : label;
+        return `  <code>${t.id.slice(0, 8)}</code>${mark} bumps:${t.bumpCount} — ${text}`;
       });
       sections.push(`<b>${header}</b>\n` + rows.join("\n"));
     }
@@ -293,8 +309,9 @@ export async function reportCallbackHandler(ctx: Context) {
     };
     const lines = tickets.map((t) => {
       const st = statusLabel[t.status] ?? t.status;
-      const desc = t.description.length > 55 ? t.description.slice(0, 55) + "…" : t.description;
-      return `${st} <code>${t.id.slice(0, 8)}</code> bumps: ${t.bumpCount}\n   ${desc}`;
+      const label = (t as any).title || t.description.slice(0, 55);
+      const text = label.length > 55 ? label.slice(0, 55) + "…" : label;
+      return `${st} <code>${t.id.slice(0, 8)}</code> bumps: ${t.bumpCount}\n   ${text}`;
     });
     return ctx.reply("<b>Мои тикеты:</b>\n\n" + lines.join("\n\n"), {
       parse_mode: "HTML",
@@ -316,9 +333,9 @@ export async function reportCallbackHandler(ctx: Context) {
 
   if (data.startsWith("cat_") && s.step === "category") {
     const cat = data.slice(4);
-    s.category = cat; s.step = "description";
+    s.category = cat; s.step = "title";
     const catLabel = CATS.find(c => c.value === cat)?.label ?? cat;
-    return ctx.reply(catLabel + "\n\nОпиши баг подробно:", {
+    return ctx.reply(catLabel + "\n\nВведи краткое название бага (до 100 символов):", {
       reply_markup: { inline_keyboard: [[{ text: "К категориям", callback_data: "menu_report" }]] },
     });
   }
@@ -371,11 +388,12 @@ export async function reportCallbackHandler(ctx: Context) {
   }
 
   if (data === "similar_none" && s.step === "similar_check") {
+    const title = s.title;
     const desc = s.description!;
     const cat = s.category!;
     const crash = s.pendingCrashReport;
     clearSession(s);
-    await submitTicket(ctx, desc, cat, crash);
+    await submitTicket(ctx, title, desc, cat, crash);
     return;
   }
 }
@@ -403,12 +421,12 @@ export async function reportDocumentHandler(ctx: Context) {
 }
 
 // --- Submit ---
-async function submitTicket(ctx: Context, description: string, category: string, crashReport?: string) {
+async function submitTicket(ctx: Context, title: string | undefined, description: string, category: string, crashReport?: string) {
   const from = ctx.from!;
   const reportedBy = from.username ? "@" + from.username : from.first_name;
   const telegramId = String(from.id);
   const ticket = await db.ticket.create({
-    data: { description, crashReport, reportedBy, category: category as any, telegramId },
+    data: { title, description, crashReport, reportedBy, category: category as any, telegramId },
   });
   const catFormatted = formatCategory(category as any);
   const logType = crashReport
@@ -416,6 +434,7 @@ async function submitTicket(ctx: Context, description: string, category: string,
     : "нет";
   await ctx.reply(
     "Тикет создан.\n\n" +
+      (title ? "Название: <b>" + title + "</b>\n" : "") +
       "ID: <code>" + ticket.id + "</code>\n" +
       "Категория: " + catFormatted + "\n" +
       "Лог: " + logType + "\n" +

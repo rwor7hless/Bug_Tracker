@@ -10,8 +10,10 @@ datasource db {
 
 model Ticket {
   id          String   @id @default(uuid())
-  description String
-  crashReport String?
+  title          String?
+  description    String
+  crashReport    String?
+  resolveComment String?
   status      Status   @default(OPEN)
   category    Category @default(OTHER)
   duplicateOf String?
