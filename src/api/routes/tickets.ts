@@ -131,6 +131,11 @@ export async function ticketRoutes(app: FastifyInstance) {
     const ticket = await db.ticket.update({ where: { id }, data }).catch(() => null);
     if (!ticket) return reply.code(404).send({ error: "Not found" });
 
+    // Auto-bump original ticket when marking as duplicate
+    if (data.status === "DUPLICATE" && duplicateOf) {
+      await db.ticket.update({ where: { id: duplicateOf }, data: { bumpCount: { increment: 1 } } }).catch(() => {});
+    }
+
     const ticketTitle = (ticket as any).title || ticket.description.slice(0, 60);
     if (data.status === "RESOLVED") {
       const comment = resolveComment?.trim();
