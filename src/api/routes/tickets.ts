@@ -25,11 +25,23 @@ export async function ticketRoutes(app: FastifyInstance) {
       where.status = status as Status;
     }
     if (search) {
-      where.OR = [
-        { title: { contains: search, mode: "insensitive" } },
-        { description: { contains: search, mode: "insensitive" } },
-        { crashReport: { contains: search, mode: "insensitive" } },
-      ];
+      const STOP_WORDS = new Set(["у", "в", "с", "к", "и", "а", "но", "на", "по", "за", "из", "от", "до", "об", "со", "не", "ни", "то", "же", "ли", "бы"]);
+      const tokens = search.trim().toLowerCase().split(/\s+/).filter((t: string) => t.length >= 2 && !STOP_WORDS.has(t));
+      if (tokens.length === 0) {
+        // fallback: use raw search string
+        where.OR = [
+          { title: { contains: search, mode: "insensitive" } },
+          { description: { contains: search, mode: "insensitive" } },
+          { crashReport: { contains: search, mode: "insensitive" } },
+        ];
+      } else {
+        // Match tickets containing ANY of the tokens (OR across all tokens + fields)
+        where.OR = tokens.flatMap((token: string) => [
+          { title: { contains: token, mode: "insensitive" } },
+          { description: { contains: token, mode: "insensitive" } },
+          { crashReport: { contains: token, mode: "insensitive" } },
+        ]);
+      }
     }
 
     const orderBy: any =
