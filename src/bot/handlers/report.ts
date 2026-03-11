@@ -41,7 +41,9 @@ type Session = {
   pendingCrashReport?: string;
   similarIds?: string[];
   listPage?: number;
-  listTickets?: string; // JSON-serialized ticket ids for pagination
+  listTickets?: string;
+  menuMsgId?: number;
+  chatId?: number;
 };
 
 const CATS = [
@@ -61,6 +63,52 @@ function catKb() {
       [{ text: "Назад", callback_data: "menu_back" }],
     ],
   };
+}
+
+// --- Single-message helper ---
+// Edits the stored bot message if available, otherwise sends a new one.
+async function botSend(ctx: Context, s: Session, text: string, extra: any) {
+  const c = ctx as any;
+
+  // Callback query context: edit the message the button was on
+  const cbMsg = c.callbackQuery?.message;
+  if (cbMsg) {
+    try {
+      await ctx.telegram.editMessageText(cbMsg.chat.id, cbMsg.message_id, undefined, text, extra);
+      s.menuMsgId = cbMsg.message_id;
+      s.chatId = cbMsg.chat.id;
+      return;
+    } catch (e: any) {
+      if (e?.description?.includes("message is not modified")) return;
+      // fall through
+    }
+  }
+
+  // Have stored message: edit it
+  if (s.menuMsgId && s.chatId) {
+    try {
+      await ctx.telegram.editMessageText(s.chatId, s.menuMsgId, undefined, text, extra);
+      return;
+    } catch (e: any) {
+      if (e?.description?.includes("message is not modified")) return;
+      // message too old or deleted — send new
+    }
+  }
+
+  // Send new message
+  const chatId = s.chatId ?? c.message?.chat?.id ?? c.chat?.id;
+  if (chatId) {
+    const msg = await ctx.telegram.sendMessage(chatId, text, extra);
+    s.menuMsgId = msg.message_id;
+    s.chatId = chatId;
+  }
+}
+
+// Delete a message silently (ignore errors if already deleted / no permission)
+async function tryDelete(ctx: Context, chatId: number, messageId: number) {
+  try {
+    await ctx.telegram.deleteMessage(chatId, messageId);
+  } catch {}
 }
 
 // --- Vector duplicate detection ---
@@ -95,11 +143,12 @@ function clearSession(s: Session) {
   s.similarIds = undefined;
   s.listPage = undefined;
   s.listTickets = undefined;
+  // menuMsgId and chatId are preserved intentionally
 }
 
 const LIST_PAGE_SIZE = 5;
 
-async function showTicketList(ctx: Context, tickets: any[], page: number, title: string) {
+async function showTicketList(ctx: Context, s: Session, tickets: any[], page: number, title: string) {
   const total = tickets.length;
   const totalPages = Math.max(1, Math.ceil(total / LIST_PAGE_SIZE));
   const pageTickets = tickets.slice(page * LIST_PAGE_SIZE, (page + 1) * LIST_PAGE_SIZE);
@@ -135,7 +184,8 @@ async function showTicketList(ctx: Context, tickets: any[], page: number, title:
   }
   nav.push([{ text: "В меню", callback_data: "menu_back" }]);
 
-  return ctx.reply(
+  return botSend(
+    ctx, s,
     `<b>${title}</b> (${total})\n\n` + (sections.join("\n\n") || "Нет тикетов."),
     { parse_mode: "HTML", reply_markup: { inline_keyboard: nav } }
   );
@@ -145,7 +195,7 @@ async function checkSimilarAndProceed(ctx: Context, s: Session) {
   const similar = await findSimilar(s.title ? s.title + " " + s.description! : s.description!, s.category!);
 
   if (!similar.length) {
-    await submitTicket(ctx, s.title, s.description!, s.category!, s.pendingCrashReport);
+    await submitTicket(ctx, s, s.title, s.description!, s.category!, s.pendingCrashReport);
     clearSession(s);
     return;
   }
@@ -168,14 +218,12 @@ async function checkSimilarAndProceed(ctx: Context, s: Session) {
   buttons.push([{ text: "Подходящих нет — создать новый", callback_data: "similar_none" }]);
   buttons.push([{ text: "Отмена", callback_data: "menu_back" }]);
 
-  await ctx.reply(
+  await botSend(
+    ctx, s,
     "<b>Найдены похожие тикеты:</b>\n\n" +
       lines.join("\n\n") +
       "\n\n<i>Выбери похожий, чтобы добавить bump, или создай новый:</i>",
-    {
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buttons },
-    }
+    { parse_mode: "HTML", reply_markup: { inline_keyboard: buttons } }
   );
 }
 
@@ -185,7 +233,8 @@ export async function showMainMenu(ctx: Context) {
   if (!c.session) c.session = {};
   const s = c.session as Session;
   clearSession(s);
-  return ctx.reply(
+  return botSend(
+    ctx, s,
     "<b>Bug Report</b>\n\nЧто хочешь сделать?",
     {
       parse_mode: "HTML",
@@ -209,14 +258,23 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
   const s = c.session as Session;
   const text: string = c.message?.text?.trim() || "";
 
+  // Delete user's text message to keep the chat clean
+  const userMsgId: number | undefined = c.message?.message_id;
+  const userChatId: number | undefined = c.message?.chat?.id;
+  if (userMsgId && userChatId) {
+    tryDelete(ctx, userChatId, userMsgId);
+  }
+
   if (s.step === "title") {
     if (text.length > 100) {
-      await ctx.reply("Название слишком длинное. Максимум 100 символов. Попробуй ещё раз:");
+      await botSend(ctx, s, "Название слишком длинное. Максимум 100 символов. Попробуй ещё раз:", {
+        reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
+      });
       return true;
     }
     s.title = text;
     s.step = "description";
-    await ctx.reply("Название принято.\n\nТеперь опиши баг подробно: что произошло, как воспроизвести:", {
+    await botSend(ctx, s, "Название принято.\n\nТеперь опиши баг подробно: что произошло, как воспроизвести:", {
       reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
     });
     return true;
@@ -225,7 +283,7 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
   if (s.step === "description") {
     s.description = text;
     s.step = "crash_prompt";
-    await ctx.reply("Описание принято.\n\nЕсть лог / краш-репорт?", {
+    await botSend(ctx, s, "Описание принято.\n\nЕсть лог / краш-репорт?", {
       reply_markup: {
         inline_keyboard: [
           [{ text: "Да", callback_data: "crash_yes" }, { text: "Нет", callback_data: "crash_no" }],
@@ -238,7 +296,9 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
 
   if (s.step === "crash_link") {
     if (!text.startsWith("http")) {
-      await ctx.reply("Укажи корректную ссылку (начинается с http):");
+      await botSend(ctx, s, "Укажи корректную ссылку (начинается с http):", {
+        reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
+      });
       return true;
     }
     s.pendingCrashReport = text;
@@ -256,7 +316,6 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
     s.step = undefined;
     let results: any[];
 
-    // Tag search: "CRH-", "BUG-001", etc.
     const TAG_PREFIXES_BOT = new Set(["CRH", "LAG", "VIS", "GME", "BUG"]);
     const tagMatch = text.trim().match(/^([A-Z]{2,4})-(\d*)$/i);
     if (tagMatch && TAG_PREFIXES_BOT.has(tagMatch[1].toUpperCase())) {
@@ -278,7 +337,7 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
     }
 
     if (!results.length) {
-      await ctx.reply("По запросу <b>" + text + "</b> ничего не найдено.", {
+      await botSend(ctx, s, "По запросу <b>" + text + "</b> ничего не найдено.", {
         parse_mode: "HTML",
         reply_markup: { inline_keyboard: [[{ text: "В меню", callback_data: "menu_back" }]] },
       });
@@ -286,7 +345,7 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
     }
     s.listTickets = JSON.stringify(results.map((t: any) => t.id));
     s.listPage = 0;
-    await showTicketList(ctx, results, 0, `Результаты: «${text}»`);
+    await showTicketList(ctx, s, results, 0, `Результаты: «${text}»`);
     return true;
   }
 
@@ -298,7 +357,7 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
           where: text.length < 36 ? { id: { startsWith: text } } : { id: text },
         });
     if (!ticket) {
-      await ctx.reply("Тикет не найден.", {
+      await botSend(ctx, s, "Тикет не найден.", {
         reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
       });
       return true;
@@ -307,7 +366,8 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
     const from = ctx.from!;
     const who = from.username ? "@" + from.username : from.first_name;
     s.step = undefined;
-    await ctx.reply(
+    await botSend(
+      ctx, s,
       "Bump засчитан.\n\n" +
         "🏷 <code>" + ((ticket as any).tag ?? ticket.id.slice(0, 8)) + "</code>\n" +
         ticket.description.slice(0, 80) + (ticket.description.length > 80 ? "…" : "") + "\n\n" +
@@ -343,7 +403,7 @@ export async function reportCallbackHandler(ctx: Context) {
 
   if (data === "menu_report") {
     s.step = "category"; s.description = undefined; s.category = undefined;
-    return ctx.reply("<b>Новый баг-репорт</b>\n\nВыбери категорию:", { parse_mode: "HTML", reply_markup: catKb() });
+    return botSend(ctx, s, "<b>Новый баг-репорт</b>\n\nВыбери категорию:", { parse_mode: "HTML", reply_markup: catKb() });
   }
 
   if (data.startsWith("menu_list_")) {
@@ -353,14 +413,14 @@ export async function reportCallbackHandler(ctx: Context) {
       orderBy: { bumpCount: "desc" },
     });
     if (!tickets.length) {
-      await ctx.reply("Открытых тикетов нет.", {
+      await botSend(ctx, s, "Открытых тикетов нет.", {
         reply_markup: { inline_keyboard: [[{ text: "В меню", callback_data: "menu_back" }]] },
       });
       return;
     }
     s.listTickets = JSON.stringify(tickets.map((t) => t.id));
     s.listPage = page;
-    return showTicketList(ctx, tickets, page, "Открытые баги");
+    return showTicketList(ctx, s, tickets, page, "Открытые баги");
   }
 
   if (data.startsWith("list_page_")) {
@@ -371,22 +431,21 @@ export async function reportCallbackHandler(ctx: Context) {
       where: { id: { in: ids } },
       orderBy: { bumpCount: "desc" },
     });
-    // Preserve original order
     const ordered = ids.map(id => tickets.find(t => t.id === id)).filter(Boolean) as typeof tickets;
     s.listPage = page;
-    return showTicketList(ctx, ordered, page, "Открытые баги");
+    return showTicketList(ctx, s, ordered, page, "Открытые баги");
   }
 
   if (data === "menu_search") {
     s.step = "search_query";
-    return ctx.reply("Введи поисковый запрос:", {
+    return botSend(ctx, s, "Введи поисковый запрос:", {
       reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
     });
   }
 
   if (data === "menu_bump") {
     s.step = "bump_id";
-    return ctx.reply("Введи тег тикета (например <code>BUG-001</code>) или первые 8 символов ID:", {
+    return botSend(ctx, s, "Введи тег тикета (например <code>BUG-001</code>) или первые 8 символов ID:", {
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
     });
@@ -401,14 +460,14 @@ export async function reportCallbackHandler(ctx: Context) {
     const cat = data.slice(4);
     s.category = cat; s.step = "title";
     const catLabel = CATS.find(c => c.value === cat)?.label ?? cat;
-    return ctx.reply(catLabel + "\n\nВведи краткое название бага (до 100 символов):", {
+    return botSend(ctx, s, catLabel + "\n\nВведи краткое название бага (до 100 символов):", {
       reply_markup: { inline_keyboard: [[{ text: "К категориям", callback_data: "menu_report" }]] },
     });
   }
 
   if (data === "crash_yes" && s.step === "crash_prompt") {
     s.step = "crash_type";
-    return ctx.reply("Как прикрепить лог?", {
+    return botSend(ctx, s, "Как прикрепить лог?", {
       reply_markup: {
         inline_keyboard: [
           [{ text: "Ссылка (mclo.gs)", callback_data: "log_link" }, { text: "Текст", callback_data: "log_text" }],
@@ -425,23 +484,26 @@ export async function reportCallbackHandler(ctx: Context) {
     return;
   }
 
-  if (data === "log_link") { s.step = "crash_link"; return ctx.reply("Вставь ссылку на лог:"); }
-  if (data === "log_text") { s.step = "crash_text"; return ctx.reply("Вставь текст лога:"); }
-  if (data === "log_file") { s.step = "crash_file"; return ctx.reply("Отправь файл (.log или .txt):"); }
+  if (data === "log_link") { s.step = "crash_link"; return botSend(ctx, s, "Вставь ссылку на лог:", { reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] } }); }
+  if (data === "log_text") { s.step = "crash_text"; return botSend(ctx, s, "Вставь текст лога:", { reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] } }); }
+  if (data === "log_file") { s.step = "crash_file"; return botSend(ctx, s, "Отправь файл (.log или .txt):", { reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] } }); }
 
   // --- Similar tickets ---
   if (data.startsWith("similar_bump_") && s.step === "similar_check") {
     const ticketId = data.slice("similar_bump_".length);
     const ticket = await db.ticket.findUnique({ where: { id: ticketId } });
     if (!ticket) {
-      await ctx.reply("Тикет не найден.");
+      await botSend(ctx, s, "Тикет не найден.", {
+        reply_markup: { inline_keyboard: [[{ text: "В меню", callback_data: "menu_back" }]] },
+      });
       return showMainMenu(ctx);
     }
     const updated = await db.ticket.update({ where: { id: ticketId }, data: { bumpCount: { increment: 1 } } });
     clearSession(s);
     const from = ctx.from!;
     const who = from.username ? "@" + from.username : from.first_name;
-    return ctx.reply(
+    return botSend(
+      ctx, s,
       "Bump добавлен похожему тикету.\n\n" +
         "ID: <code>" + ticket.id.slice(0, 8) + "</code>\n" +
         ticket.description.slice(0, 80) + "\n\n" +
@@ -459,7 +521,7 @@ export async function reportCallbackHandler(ctx: Context) {
     const cat = s.category!;
     const crash = s.pendingCrashReport;
     clearSession(s);
-    await submitTicket(ctx, title, desc, cat, crash);
+    await submitTicket(ctx, s, title, desc, cat, crash);
     return;
   }
 }
@@ -472,13 +534,26 @@ export async function reportDocumentHandler(ctx: Context) {
   if (s.step !== "crash_file") return;
   const doc = c.message?.document;
   if (!doc) return;
+
+  // Delete the file message to keep chat clean
+  const userMsgId: number | undefined = c.message?.message_id;
+  const userChatId: number | undefined = c.message?.chat?.id;
+  if (userMsgId && userChatId) {
+    tryDelete(ctx, userChatId, userMsgId);
+  }
+
   const fileId = doc.file_id;
   const fileName = doc.file_name ?? "log";
   try {
     const fileUrl = await ctx.telegram.getFileLink(fileId);
     const res = await fetch(fileUrl.href);
     const content = await res.text();
-    if (content.length > 50000) return ctx.reply("Файл слишком большой. Используй ссылку.");
+    if (content.length > 50000) {
+      await botSend(ctx, s, "Файл слишком большой. Используй ссылку.", {
+        reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
+      });
+      return;
+    }
     s.pendingCrashReport = content;
   } catch {
     s.pendingCrashReport = "[Файл: " + fileName + ", id: " + fileId + "]";
@@ -487,7 +562,7 @@ export async function reportDocumentHandler(ctx: Context) {
 }
 
 // --- Submit ---
-async function submitTicket(ctx: Context, title: string | undefined, description: string, category: string, crashReport?: string) {
+async function submitTicket(ctx: Context, s: Session, title: string | undefined, description: string, category: string, crashReport?: string) {
   const from = ctx.from!;
   const reportedBy = from.username ? "@" + from.username : from.first_name;
   const telegramId = String(from.id);
@@ -495,21 +570,21 @@ async function submitTicket(ctx: Context, title: string | undefined, description
     data: { title, description, crashReport, reportedBy, category: category as any, telegramId },
   });
 
-  // Assign tag synchronously (fast DB op)
   const tag = await assignBotTag(ticket.id, category).catch(() => null);
 
-  // Generate and store embedding asynchronously (don't block reply)
   const embText = [title, description].filter(Boolean).join(" ");
   embed(embText, "passage").then((vec) => {
     const vecSql = vectorToSql(vec);
     db.$executeRawUnsafe(`UPDATE "Ticket" SET embedding = '${vecSql}'::vector WHERE id = '${ticket.id}'`).catch(() => {});
   }).catch(() => {});
+
   const catFormatted = formatCategory(category as any);
   const logType = crashReport
     ? crashReport.startsWith("http") ? "ссылка" : crashReport.startsWith("[Файл") ? "файл" : "текст"
     : "нет";
   const ticketRef = tag ?? ticket.id.slice(0, 8);
-  await ctx.reply(
+  await botSend(
+    ctx, s,
     "Тикет создан.\n\n" +
       (title ? "Название: <b>" + title + "</b>\n" : "") +
       "🏷 <code>" + ticketRef + "</code>\n" +
