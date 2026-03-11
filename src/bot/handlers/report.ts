@@ -2,6 +2,9 @@ import { Context } from "telegraf";
 import db from "../../db.js";
 import { formatCategory } from "../categorize.js";
 import { embed, vectorToSql } from "../../embeddings.js";
+import fs from "fs/promises";
+import path from "path";
+import { getUploadDir } from "../../api/routes/tickets.js";
 
 const BOT_CATEGORY_PREFIX: Record<string, string> = {
   CRASH: "CRH", LAG: "LAG", VISUAL: "VIS", GAMEPLAY: "GME", OTHER: "BUG",
@@ -29,6 +32,7 @@ type Step =
   | "crash_link"
   | "crash_text"
   | "crash_file"
+  | "photos_collecting"
   | "bump_id"
   | "similar_check"
   | "search_query";
@@ -39,6 +43,8 @@ type Session = {
   description?: string;
   category?: string;
   pendingCrashReport?: string;
+  pendingTicketId?: string;
+  pendingPhotoFileIds?: string[];
   similarIds?: string[];
   listPage?: number;
   listTickets?: string;
@@ -66,11 +72,9 @@ function catKb() {
 }
 
 // --- Single-message helper ---
-// Edits the stored bot message if available, otherwise sends a new one.
 async function botSend(ctx: Context, s: Session, text: string, extra: any) {
   const c = ctx as any;
 
-  // Callback query context: edit the message the button was on
   const cbMsg = c.callbackQuery?.message;
   if (cbMsg) {
     try {
@@ -80,22 +84,18 @@ async function botSend(ctx: Context, s: Session, text: string, extra: any) {
       return;
     } catch (e: any) {
       if (e?.description?.includes("message is not modified")) return;
-      // fall through
     }
   }
 
-  // Have stored message: edit it
   if (s.menuMsgId && s.chatId) {
     try {
       await ctx.telegram.editMessageText(s.chatId, s.menuMsgId, undefined, text, extra);
       return;
     } catch (e: any) {
       if (e?.description?.includes("message is not modified")) return;
-      // message too old or deleted — send new
     }
   }
 
-  // Send new message
   const chatId = s.chatId ?? c.message?.chat?.id ?? c.chat?.id;
   if (chatId) {
     const msg = await ctx.telegram.sendMessage(chatId, text, extra);
@@ -104,7 +104,6 @@ async function botSend(ctx: Context, s: Session, text: string, extra: any) {
   }
 }
 
-// Delete a message silently (ignore errors if already deleted / no permission)
 async function tryDelete(ctx: Context, chatId: number, messageId: number) {
   try {
     await ctx.telegram.deleteMessage(chatId, messageId);
@@ -140,6 +139,8 @@ function clearSession(s: Session) {
   s.description = undefined;
   s.category = undefined;
   s.pendingCrashReport = undefined;
+  s.pendingTicketId = undefined;
+  s.pendingPhotoFileIds = undefined;
   s.similarIds = undefined;
   s.listPage = undefined;
   s.listTickets = undefined;
@@ -196,7 +197,6 @@ async function checkSimilarAndProceed(ctx: Context, s: Session) {
 
   if (!similar.length) {
     await submitTicket(ctx, s, s.title, s.description!, s.category!, s.pendingCrashReport);
-    clearSession(s);
     return;
   }
 
@@ -258,7 +258,6 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
   const s = c.session as Session;
   const text: string = c.message?.text?.trim() || "";
 
-  // Delete user's text message to keep the chat clean
   const userMsgId: number | undefined = c.message?.message_id;
   const userChatId: number | undefined = c.message?.chat?.id;
   if (userMsgId && userChatId) {
@@ -391,7 +390,6 @@ export async function reportCallbackHandler(ctx: Context) {
   const s = c.session as Session;
   await ctx.answerCbQuery();
 
-  // Delegate admin_ callbacks
   if (data.startsWith("admin_")) {
     const { handleAdminCallback } = await import("./admin.js");
     await handleAdminCallback(ctx, data);
@@ -488,6 +486,37 @@ export async function reportCallbackHandler(ctx: Context) {
   if (data === "log_text") { s.step = "crash_text"; return botSend(ctx, s, "Вставь текст лога:", { reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] } }); }
   if (data === "log_file") { s.step = "crash_file"; return botSend(ctx, s, "Отправь файл (.log или .txt):", { reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] } }); }
 
+  // --- Photos ---
+  if (data === "photos_done" && s.step === "photos_collecting") {
+    const fileIds = s.pendingPhotoFileIds ?? [];
+    if (fileIds.length === 0) {
+      clearSession(s);
+      return showMainMenu(ctx);
+    }
+    const ticketId = s.pendingTicketId!;
+    const uploadDir = getUploadDir();
+    await fs.mkdir(uploadDir, { recursive: true });
+
+    let saved = 0;
+    for (let i = 0; i < fileIds.length; i++) {
+      try {
+        const fileUrl = await ctx.telegram.getFileLink(fileIds[i]);
+        const res = await fetch(fileUrl.href);
+        if (!res.ok) continue;
+        const buffer = Buffer.from(await res.arrayBuffer());
+        const filename = `${ticketId}-${Date.now()}-${i}.jpg`;
+        await fs.writeFile(path.join(uploadDir, filename), buffer);
+        await db.ticketPhoto.create({ data: { ticketId, filename, order: i } });
+        saved++;
+      } catch {}
+    }
+
+    clearSession(s);
+    return botSend(ctx, s, `Прикреплено ${saved} фото. Тикет сохранён.`, {
+      reply_markup: { inline_keyboard: [[{ text: "В меню", callback_data: "menu_back" }]] },
+    });
+  }
+
   // --- Similar tickets ---
   if (data.startsWith("similar_bump_") && s.step === "similar_check") {
     const ticketId = data.slice("similar_bump_".length);
@@ -520,10 +549,46 @@ export async function reportCallbackHandler(ctx: Context) {
     const desc = s.description!;
     const cat = s.category!;
     const crash = s.pendingCrashReport;
-    clearSession(s);
+    s.similarIds = undefined;
+    s.step = undefined;
     await submitTicket(ctx, s, title, desc, cat, crash);
     return;
   }
+}
+
+// --- Photo handler ---
+export async function reportPhotoHandler(ctx: Context) {
+  const c = ctx as any;
+  if (!c.session) c.session = {};
+  const s = c.session as Session;
+  if (s.step !== "photos_collecting") return;
+
+  const photo = c.message?.photo as Array<{ file_id: string }> | undefined;
+  if (!photo?.length) return;
+
+  const userMsgId: number | undefined = c.message?.message_id;
+  const userChatId: number | undefined = c.message?.chat?.id;
+  if (userMsgId && userChatId) tryDelete(ctx, userChatId, userMsgId);
+
+  if (!s.pendingPhotoFileIds) s.pendingPhotoFileIds = [];
+  if (s.pendingPhotoFileIds.length >= 10) return;
+
+  // Take the largest available photo (last in array)
+  const largest = photo[photo.length - 1];
+  s.pendingPhotoFileIds.push(largest.file_id);
+
+  const count = s.pendingPhotoFileIds.length;
+  await botSend(ctx, s,
+    `Фото добавлено (${count}/10).\n\nОтправь ещё или нажми «Готово»:`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: `✓ Готово (${count} фото)`, callback_data: "photos_done" }],
+          [{ text: "Пропустить без фото", callback_data: "menu_back" }],
+        ],
+      },
+    }
+  );
 }
 
 // --- Document handler ---
@@ -535,7 +600,6 @@ export async function reportDocumentHandler(ctx: Context) {
   const doc = c.message?.document;
   if (!doc) return;
 
-  // Delete the file message to keep chat clean
   const userMsgId: number | undefined = c.message?.message_id;
   const userChatId: number | undefined = c.message?.chat?.id;
   if (userMsgId && userChatId) {
@@ -583,17 +647,28 @@ async function submitTicket(ctx: Context, s: Session, title: string | undefined,
     ? crashReport.startsWith("http") ? "ссылка" : crashReport.startsWith("[Файл") ? "файл" : "текст"
     : "нет";
   const ticketRef = tag ?? ticket.id.slice(0, 8);
+
+  // Transition to photo collection
+  s.pendingTicketId = ticket.id;
+  s.pendingPhotoFileIds = [];
+  s.step = "photos_collecting";
+
   await botSend(
     ctx, s,
-    "Тикет создан.\n\n" +
+    "Тикет создан!\n\n" +
       (title ? "Название: <b>" + title + "</b>\n" : "") +
       "🏷 <code>" + ticketRef + "</code>\n" +
       "Категория: " + catFormatted + "\n" +
       "Лог: " + logType + "\n" +
-      "Автор: " + reportedBy,
+      "Автор: " + reportedBy +
+      "\n\nМожешь прикрепить скриншоты (до 10 фото):",
     {
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: [[{ text: "В меню", callback_data: "menu_back" }]] },
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Пропустить (без фото)", callback_data: "menu_back" }],
+        ],
+      },
     }
   );
 }

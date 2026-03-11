@@ -1,6 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import TicketCard from "../components/TicketCard";
 import { useAuth } from "../components/AuthContext";
+
+interface TicketPhoto {
+  id: string;
+  filename: string;
+  order: number;
+}
 
 interface Ticket {
   id: string;
@@ -15,6 +21,7 @@ interface Ticket {
   bumpCount: number;
   reportedBy: string;
   createdAt: string;
+  photos: TicketPhoto[];
 }
 
 const CATEGORIES = [
@@ -51,7 +58,9 @@ export default function Tickets() {
   const [newTitle, setNewTitle] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const [newCrash, setNewCrash] = useState("");
+  const [newPhotos, setNewPhotos] = useState<File[]>([]);
   const [creating, setCreating] = useState(false);
+  const photoInputRef = useRef<HTMLInputElement>(null);
 
   async function load() {
     setLoading(true);
@@ -69,7 +78,7 @@ export default function Tickets() {
   async function createTicket() {
     if (!newDescription.trim()) return;
     setCreating(true);
-    await fetch("/api/tickets", {
+    const r = await fetch("/api/tickets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -79,13 +88,33 @@ export default function Tickets() {
         category: newCategory,
       }),
     });
+    if (r.ok && newPhotos.length > 0) {
+      const ticket = await r.json();
+      const fd = new FormData();
+      for (const f of newPhotos) fd.append("photos", f);
+      await fetch(`/api/tickets/${ticket.id}/photos`, { method: "POST", body: fd });
+    }
     setCreating(false);
     setShowCreate(false);
     setNewTitle("");
     setNewDescription("");
     setNewCrash("");
     setNewCategory("OTHER");
+    setNewPhotos([]);
     load();
+  }
+
+  function handlePhotoSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    setNewPhotos(prev => {
+      const combined = [...prev, ...files].slice(0, 10);
+      return combined;
+    });
+    e.target.value = "";
+  }
+
+  function removePreviewPhoto(index: number) {
+    setNewPhotos(prev => prev.filter((_, i) => i !== index));
   }
 
   async function bump(id: string) {
@@ -132,6 +161,11 @@ export default function Tickets() {
   async function del(id: string) {
     if (!confirm("Удалить тикет?")) return;
     await fetch(`/api/tickets/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  async function deletePhoto(ticketId: string, photoId: string) {
+    await fetch(`/api/tickets/${ticketId}/photos/${photoId}`, { method: "DELETE" });
     load();
   }
 
@@ -192,6 +226,7 @@ export default function Tickets() {
             onReopen={reopen}
             onDuplicate={duplicate}
             onDelete={del}
+            onPhotoDelete={isAdmin ? deletePhoto : undefined}
           />
         ))}
       </div>
@@ -207,12 +242,12 @@ export default function Tickets() {
       {showCreate && (
         <div
           className="modal-overlay"
-          onClick={(e) => { if (e.target === e.currentTarget) setShowCreate(false); }}
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowCreate(false); setNewPhotos([]); } }}
         >
           <div className="modal">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <span className="modal-title">Новый тикет</span>
-              <button className="btn-ghost" onClick={() => setShowCreate(false)} style={{ padding: "4px 10px" }}>✕</button>
+              <button className="btn-ghost" onClick={() => { setShowCreate(false); setNewPhotos([]); }} style={{ padding: "4px 10px" }}>✕</button>
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -266,8 +301,60 @@ export default function Tickets() {
               />
             </div>
 
+            {/* Photo upload */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <label style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>
+                Скриншоты <span style={{ color: "var(--text-3)" }}>(необязательно, до 10 фото)</span>
+              </label>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                style={{ display: "none" }}
+                onChange={handlePhotoSelect}
+              />
+              {newPhotos.length > 0 && (
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {newPhotos.map((f, i) => {
+                    const url = URL.createObjectURL(f);
+                    return (
+                      <div key={i} style={{ position: "relative" }}>
+                        <img
+                          src={url}
+                          alt=""
+                          style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 4, border: "1px solid var(--border)" }}
+                          onLoad={() => URL.revokeObjectURL(url)}
+                        />
+                        <button
+                          onClick={() => removePreviewPhoto(i)}
+                          style={{
+                            position: "absolute", top: -6, right: -6,
+                            background: "var(--danger, #dc2626)", border: "none", borderRadius: "50%",
+                            width: 18, height: 18, cursor: "pointer", color: "#fff",
+                            fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center",
+                            lineHeight: 1,
+                          }}
+                        >✕</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {newPhotos.length < 10 && (
+                <button
+                  className="btn-ghost"
+                  style={{ fontSize: 12, alignSelf: "flex-start" }}
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                >
+                  + Добавить фото
+                </button>
+              )}
+            </div>
+
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-              <button className="btn-ghost" onClick={() => setShowCreate(false)}>Отмена</button>
+              <button className="btn-ghost" onClick={() => { setShowCreate(false); setNewPhotos([]); }}>Отмена</button>
               <button
                 className="btn-primary"
                 onClick={createTicket}

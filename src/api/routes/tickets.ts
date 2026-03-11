@@ -2,6 +2,15 @@ import { FastifyInstance } from "fastify";
 import { requireAuth } from "../middleware/auth.js";
 import db from "../../db.js";
 import { embed, vectorToSql } from "../../embeddings.js";
+import fs from "fs/promises";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+export function getUploadDir(): string {
+  return path.join(__dirname, "..", "..", "..", "..", "uploads");
+}
 
 const VALID_STATUSES = ["OPEN", "IN_PROGRESS", "DUPLICATE", "RESOLVED"];
 
@@ -56,6 +65,8 @@ async function notifyModerators(ticketId: string, message: string, excludeTelegr
   }
 }
 
+const PHOTO_INCLUDE = { photos: { orderBy: { order: "asc" as const } } };
+
 export async function ticketRoutes(app: FastifyInstance) {
   app.get<{
     Querystring: { status?: string; sort?: string; search?: string };
@@ -74,7 +85,7 @@ export async function ticketRoutes(app: FastifyInstance) {
         const tagQuery = num ? `${prefix}-${num}` : `${prefix}-`;
         const where: any = { tag: { startsWith: tagQuery } };
         if (statusFilter) where.status = statusFilter;
-        return db.ticket.findMany({ where, orderBy });
+        return db.ticket.findMany({ where, orderBy, include: PHOTO_INCLUDE });
       }
 
       // Vector similarity search (threshold 0.65)
@@ -83,14 +94,24 @@ export async function ticketRoutes(app: FastifyInstance) {
         const vecSql = vectorToSql(vec);
         const statusClause = statusFilter ? `AND status = '${statusFilter}'` : "";
         const rows = await db.$queryRawUnsafe<any[]>(`
-          SELECT *, 1 - (embedding <=> '${vecSql}'::vector) AS _sim
+          SELECT id, 1 - (embedding <=> '${vecSql}'::vector) AS _sim
           FROM "Ticket"
           WHERE embedding IS NOT NULL ${statusClause}
             AND 1 - (embedding <=> '${vecSql}'::vector) >= 0.65
           ORDER BY embedding <=> '${vecSql}'::vector
           LIMIT 50
         `);
-        return rows.map(({ _sim: _s, ...t }: { _sim: number; [k: string]: unknown }) => t);
+        const ids: string[] = rows.map((r) => r.id);
+        if (ids.length) {
+          const tickets = await db.ticket.findMany({
+            where: { id: { in: ids } },
+            include: PHOTO_INCLUDE,
+          });
+          // Re-order by original similarity order
+          const byId = Object.fromEntries(tickets.map((t) => [t.id, t]));
+          return ids.map((id) => byId[id]).filter(Boolean);
+        }
+        return [];
       } catch {
         // pgvector not available — fall back to token search
       }
@@ -105,14 +126,14 @@ export async function ticketRoutes(app: FastifyInstance) {
         { description: { contains: token, mode: "insensitive" } },
         { crashReport: { contains: token, mode: "insensitive" } },
       ]);
-      return db.ticket.findMany({ where, orderBy });
+      return db.ticket.findMany({ where, orderBy, include: PHOTO_INCLUDE });
     }
 
     // No search — normal filter
     const where: any = {};
     if (status && VALID_STATUSES.includes(status)) where.status = status;
     const orderBy: any = sort === "bumps" ? { bumpCount: "desc" } : { createdAt: "desc" };
-    return db.ticket.findMany({ where, orderBy });
+    return db.ticket.findMany({ where, orderBy, include: PHOTO_INCLUDE });
   });
 
   app.get("/api/stats", { preHandler: requireAuth }, async () => {
@@ -150,6 +171,7 @@ export async function ticketRoutes(app: FastifyInstance) {
       const cat = (category as any) || "OTHER";
       const ticket = await db.ticket.create({
         data: { title, description, crashReport, reportedBy, category: cat },
+        include: PHOTO_INCLUDE,
       });
 
       // Assign tag synchronously (fast DB op)
@@ -235,6 +257,54 @@ export async function ticketRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       await db.ticket.delete({ where: { id: req.params.id } }).catch(() => null);
+      return reply.code(204).send();
+    }
+  );
+
+  // --- Photo upload ---
+  app.post<{ Params: { id: string } }>(
+    "/api/tickets/:id/photos",
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { id } = req.params;
+      const ticket = await db.ticket.findUnique({ where: { id }, select: { id: true } });
+      if (!ticket) return reply.code(404).send({ error: "Not found" });
+
+      const uploadDir = getUploadDir();
+      await fs.mkdir(uploadDir, { recursive: true });
+
+      const parts = (req as any).files();
+      const created: any[] = [];
+      let order = await db.ticketPhoto.count({ where: { ticketId: id } });
+
+      for await (const part of parts) {
+        if (created.length >= 10) { part.resume(); continue; }
+        const ext = path.extname(part.filename || ".jpg").toLowerCase() || ".jpg";
+        const filename = `${id}-${Date.now()}-${order}${ext}`;
+        const filepath = path.join(uploadDir, filename);
+        const chunks: Buffer[] = [];
+        for await (const chunk of part.file) chunks.push(chunk);
+        await fs.writeFile(filepath, Buffer.concat(chunks));
+        const photo = await db.ticketPhoto.create({ data: { ticketId: id, filename, order } });
+        created.push(photo);
+        order++;
+      }
+
+      return { photos: created };
+    }
+  );
+
+  // --- Delete single photo ---
+  app.delete<{ Params: { id: string; photoId: string } }>(
+    "/api/tickets/:id/photos/:photoId",
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const { photoId } = req.params;
+      const photo = await db.ticketPhoto.findUnique({ where: { id: photoId } });
+      if (!photo) return reply.code(404).send({ error: "Not found" });
+      const uploadDir = getUploadDir();
+      await fs.unlink(path.join(uploadDir, photo.filename)).catch(() => {});
+      await db.ticketPhoto.delete({ where: { id: photoId } });
       return reply.code(204).send();
     }
   );

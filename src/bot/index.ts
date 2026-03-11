@@ -1,6 +1,6 @@
 import { Telegraf, session } from "telegraf";
 import db from "../db.js";
-import { showMainMenu, reportTextHandler, reportCallbackHandler, reportDocumentHandler } from "./handlers/report.js";
+import { showMainMenu, reportTextHandler, reportCallbackHandler, reportDocumentHandler, reportPhotoHandler } from "./handlers/report.js";
 import { passwordHandler } from "./handlers/password.js";
 import { adminHandler, adminPasswordStep, resolveHandler, reopenHandler, adminoutHandler } from "./handlers/admin.js";
 import { setBot } from "./botInstance.js";
@@ -43,6 +43,7 @@ export function startBot() {
 
   bot.on("callback_query", reportCallbackHandler as any);
   bot.on("document", reportDocumentHandler as any);
+  bot.on("photo", reportPhotoHandler as any);
 
   bot.launch();
   console.log("Bot started");

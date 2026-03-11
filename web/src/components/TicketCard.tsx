@@ -1,5 +1,11 @@
 import { useState } from "react";
 
+interface TicketPhoto {
+  id: string;
+  filename: string;
+  order: number;
+}
+
 interface Ticket {
   id: string;
   tag?: string | null;
@@ -13,6 +19,7 @@ interface Ticket {
   bumpCount: number;
   reportedBy: string;
   createdAt: string;
+  photos?: TicketPhoto[];
 }
 
 interface Props {
@@ -24,6 +31,7 @@ interface Props {
   onReopen: (id: string) => void;
   onDuplicate: (id: string, originalId: string) => void;
   onDelete: (id: string) => void;
+  onPhotoDelete?: (ticketId: string, photoId: string) => void;
 }
 
 const categoryLabel: Record<string, string> = {
@@ -41,7 +49,102 @@ const statusMeta: Record<string, { cls: string; text: string }> = {
   RESOLVED:    { cls: "badge-resolved", text: "Решено" },
 };
 
-export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onResolve, onReopen, onDuplicate, onDelete }: Props) {
+function PhotoCarousel({ photos, isAdmin, onDelete }: { photos: TicketPhoto[]; isAdmin: boolean; onDelete?: (id: string) => void }) {
+  const [current, setCurrent] = useState(0);
+  if (!photos.length) return null;
+
+  const photo = photos[current];
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {/* Main image */}
+      <div style={{ position: "relative", background: "#0a0a0a", borderRadius: "var(--radius)", overflow: "hidden", border: "1px solid var(--border)" }}>
+        <img
+          src={`/uploads/${photo.filename}`}
+          alt={`Скриншот ${current + 1}`}
+          style={{
+            width: "100%",
+            maxHeight: 360,
+            objectFit: "contain",
+            display: "block",
+          }}
+        />
+        {photos.length > 1 && (
+          <>
+            <button
+              onClick={() => setCurrent(c => Math.max(0, c - 1))}
+              disabled={current === 0}
+              style={{
+                position: "absolute", left: 8, top: "50%", transform: "translateY(-50%)",
+                background: "rgba(0,0,0,0.6)", border: "none", borderRadius: "50%",
+                width: 32, height: 32, cursor: "pointer", color: "#fff", fontSize: 16,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                opacity: current === 0 ? 0.3 : 1,
+              }}
+            >‹</button>
+            <button
+              onClick={() => setCurrent(c => Math.min(photos.length - 1, c + 1))}
+              disabled={current === photos.length - 1}
+              style={{
+                position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+                background: "rgba(0,0,0,0.6)", border: "none", borderRadius: "50%",
+                width: 32, height: 32, cursor: "pointer", color: "#fff", fontSize: 16,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                opacity: current === photos.length - 1 ? 0.3 : 1,
+              }}
+            >›</button>
+          </>
+        )}
+        <div style={{
+          position: "absolute", bottom: 8, right: 8,
+          background: "rgba(0,0,0,0.6)", color: "#fff",
+          fontSize: 11, padding: "2px 8px", borderRadius: 10,
+        }}>
+          {current + 1} / {photos.length}
+        </div>
+        {isAdmin && onDelete && (
+          <button
+            onClick={() => {
+              if (confirm("Удалить фото?")) {
+                onDelete(photo.id);
+                setCurrent(c => Math.min(c, photos.length - 2));
+              }
+            }}
+            style={{
+              position: "absolute", top: 8, right: 8,
+              background: "rgba(220,50,50,0.85)", border: "none", borderRadius: 4,
+              color: "#fff", fontSize: 11, padding: "3px 8px", cursor: "pointer",
+            }}
+          >
+            Удалить
+          </button>
+        )}
+      </div>
+
+      {/* Thumbnail strip */}
+      {photos.length > 1 && (
+        <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 2 }}>
+          {photos.map((p, i) => (
+            <img
+              key={p.id}
+              src={`/uploads/${p.filename}`}
+              alt=""
+              onClick={() => setCurrent(i)}
+              style={{
+                width: 52, height: 52, objectFit: "cover", borderRadius: 4, cursor: "pointer",
+                border: i === current ? "2px solid var(--accent)" : "2px solid transparent",
+                flexShrink: 0, opacity: i === current ? 1 : 0.6,
+                transition: "opacity 0.15s, border-color 0.15s",
+              }}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onResolve, onReopen, onDuplicate, onDelete, onPhotoDelete }: Props) {
   const [showDetail, setShowDetail] = useState(false);
   const [showCrash, setShowCrash] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
@@ -57,6 +160,7 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
   const isLink = ticket.crashReport?.startsWith("http");
   const isFile = ticket.crashReport?.startsWith("[Файл");
   const hasTextLog = ticket.crashReport && !isLink && !isFile;
+  const photos = ticket.photos ?? [];
 
   function downloadLog() {
     if (!hasTextLog) return;
@@ -75,6 +179,30 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
   return (
     <>
       <div className="card" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {/* Photo strip on card (max 3 thumbnails) */}
+        {photos.length > 0 && (
+          <div style={{ display: "flex", gap: 6, cursor: "pointer" }} onClick={() => setShowDetail(true)}>
+            {photos.slice(0, 3).map((p, i) => (
+              <div key={p.id} style={{ position: "relative" }}>
+                <img
+                  src={`/uploads/${p.filename}`}
+                  alt=""
+                  style={{ width: 64, height: 48, objectFit: "cover", borderRadius: 4, border: "1px solid var(--border)" }}
+                />
+                {i === 2 && photos.length > 3 && (
+                  <div style={{
+                    position: "absolute", inset: 0, background: "rgba(0,0,0,0.55)",
+                    borderRadius: 4, display: "flex", alignItems: "center", justifyContent: "center",
+                    color: "#fff", fontSize: 12, fontWeight: 600,
+                  }}>
+                    +{photos.length - 3}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
         <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <p style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", marginBottom: ticket.title ? 4 : 0 }}>
@@ -117,6 +245,12 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
           <span>{ticket.reportedBy}</span>
           <span>·</span>
           <span>{date}</span>
+          {photos.length > 0 && (
+            <>
+              <span>·</span>
+              <span style={{ color: "var(--text-3)" }}>📷 {photos.length}</span>
+            </>
+          )}
           <span style={{
             marginLeft: "auto",
             background: "var(--surface2)",
@@ -236,7 +370,7 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
           className="modal-overlay"
           onClick={(e) => { if (e.target === e.currentTarget) setShowDetail(false); }}
         >
-          <div className="modal" style={{ maxWidth: 640 }}>
+          <div className="modal" style={{ maxWidth: 680 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <span className="modal-title">{ticket.title || "Тикет #" + ticket.id.slice(0, 8)}</span>
               <button className="btn-ghost" onClick={() => setShowDetail(false)} style={{ padding: "4px 10px" }}>✕</button>
@@ -250,11 +384,24 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
               <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>↑ {ticket.bumpCount}</span>
             </div>
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div>
                 <p style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.05em" }}>Описание</p>
                 <p style={{ fontSize: 14, color: "var(--text)", lineHeight: 1.7, whiteSpace: "pre-wrap" }}>{ticket.description}</p>
               </div>
+
+              {photos.length > 0 && (
+                <div>
+                  <p style={{ fontSize: 11, color: "var(--text-3)", marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    Скриншоты ({photos.length})
+                  </p>
+                  <PhotoCarousel
+                    photos={photos}
+                    isAdmin={isAdmin}
+                    onDelete={onPhotoDelete ? (photoId) => onPhotoDelete(ticket.id, photoId) : undefined}
+                  />
+                </div>
+              )}
 
               {ticket.crashReport && (
                 <div>
