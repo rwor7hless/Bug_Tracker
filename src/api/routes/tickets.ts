@@ -5,6 +5,46 @@ import { embed, vectorToSql } from "../../embeddings.js";
 
 const VALID_STATUSES = ["OPEN", "IN_PROGRESS", "DUPLICATE", "RESOLVED"];
 
+// --- Tag helpers ---
+const CATEGORY_PREFIX: Record<string, string> = {
+  CRASH:    "CRH",
+  LAG:      "LAG",
+  VISUAL:   "VIS",
+  GAMEPLAY: "GME",
+  OTHER:    "BUG",
+};
+const TAG_PREFIXES = new Set(Object.values(CATEGORY_PREFIX));
+
+function formatTag(prefix: string, num: number): string {
+  return `${prefix}-${num <= 999 ? String(num).padStart(3, "0") : num}`;
+}
+
+async function assignTag(ticketId: string, category: string): Promise<string> {
+  const prefix = CATEGORY_PREFIX[category] ?? "BUG";
+  const last = await db.ticket.findFirst({
+    where: { tag: { startsWith: prefix + "-" } },
+    orderBy: { tagNumber: "desc" },
+    select: { tagNumber: true },
+  });
+  const nextNum = (last?.tagNumber ?? 0) + 1;
+  const tag = formatTag(prefix, nextNum);
+  await db.ticket.update({ where: { id: ticketId }, data: { tag, tagNumber: nextNum } });
+  return tag;
+}
+
+/** Resolve a user-supplied identifier (tag like BUG-001, short UUID, or full UUID) to a full ticket id. */
+async function resolveTicketId(ref: string): Promise<string | null> {
+  if (/^[A-Z]{2,4}-\d+$/i.test(ref)) {
+    const t = await db.ticket.findUnique({ where: { tag: ref.toUpperCase() }, select: { id: true } });
+    return t?.id ?? null;
+  }
+  if (ref.length < 36) {
+    const t = await db.ticket.findFirst({ where: { id: { startsWith: ref } }, select: { id: true } });
+    return t?.id ?? null;
+  }
+  return ref;
+}
+
 async function notifyModerators(ticketId: string, message: string, excludeTelegramId?: string | null) {
   const { getBot } = await import("../../bot/botInstance.js");
   const bot = getBot();
@@ -22,30 +62,40 @@ export async function ticketRoutes(app: FastifyInstance) {
   }>("/api/tickets", { preHandler: requireAuth }, async (req) => {
     const { status, sort, search } = req.query;
 
-    // If search query provided — use vector similarity search
     if (search?.trim()) {
       const statusFilter = status && VALID_STATUSES.includes(status) ? status : null;
+      const orderBy: any = sort === "bumps" ? { bumpCount: "desc" } : { createdAt: "desc" };
 
+      // Tag search: matches "CRH-", "BUG-001", "LAG-12", etc.
+      const tagSearch = search.trim().match(/^([A-Z]{2,4})-(\d*)$/i);
+      if (tagSearch && TAG_PREFIXES.has(tagSearch[1].toUpperCase())) {
+        const prefix = tagSearch[1].toUpperCase();
+        const num = tagSearch[2];
+        const tagQuery = num ? `${prefix}-${num}` : `${prefix}-`;
+        const where: any = { tag: { startsWith: tagQuery } };
+        if (statusFilter) where.status = statusFilter;
+        return db.ticket.findMany({ where, orderBy });
+      }
+
+      // Vector similarity search (threshold 0.65)
       try {
         const vec = await embed(search.trim(), "query");
         const vecSql = vectorToSql(vec);
         const statusClause = statusFilter ? `AND status = '${statusFilter}'` : "";
-        // Return tickets ordered by cosine similarity, threshold 0.55
         const rows = await db.$queryRawUnsafe<any[]>(`
           SELECT *, 1 - (embedding <=> '${vecSql}'::vector) AS _sim
           FROM "Ticket"
           WHERE embedding IS NOT NULL ${statusClause}
-            AND 1 - (embedding <=> '${vecSql}'::vector) >= 0.55
+            AND 1 - (embedding <=> '${vecSql}'::vector) >= 0.65
           ORDER BY embedding <=> '${vecSql}'::vector
           LIMIT 50
         `);
-        // Remove internal _sim field before returning
         return rows.map(({ _sim: _s, ...t }: { _sim: number; [k: string]: unknown }) => t);
       } catch {
         // pgvector not available — fall back to token search
       }
 
-      // Fallback: token OR search
+      // Fallback: token OR search on title/description
       const STOP_WORDS = new Set(["у", "в", "с", "к", "и", "а", "но", "на", "по", "за", "из", "от", "до", "об", "со", "не", "ни", "то", "же", "ли", "бы"]);
       const tokens = search.trim().toLowerCase().split(/\s+/).filter((t: string) => t.length >= 2 && !STOP_WORDS.has(t));
       const where: any = {};
@@ -55,7 +105,6 @@ export async function ticketRoutes(app: FastifyInstance) {
         { description: { contains: token, mode: "insensitive" } },
         { crashReport: { contains: token, mode: "insensitive" } },
       ]);
-      const orderBy: any = sort === "bumps" ? { bumpCount: "desc" } : { createdAt: "desc" };
       return db.ticket.findMany({ where, orderBy });
     }
 
@@ -96,12 +145,15 @@ export async function ticketRoutes(app: FastifyInstance) {
       const { title, description, crashReport, category } = req.body;
       const jwtUser = (req as any).user as { username: string } | undefined;
       const reportedBy = req.body.reportedBy || jwtUser?.username || "web";
-      if (!description)
-        return reply.code(400).send({ error: "description required" });
+      if (!description) return reply.code(400).send({ error: "description required" });
 
+      const cat = (category as any) || "OTHER";
       const ticket = await db.ticket.create({
-        data: { title, description, crashReport, reportedBy, ...(category ? { category: category as any } : {}) },
+        data: { title, description, crashReport, reportedBy, category: cat },
       });
+
+      // Assign tag synchronously (fast DB op)
+      const tag = await assignTag(ticket.id, cat).catch(() => null);
 
       // Generate embedding asynchronously
       const embText = [title, description].filter(Boolean).join(" ");
@@ -110,7 +162,7 @@ export async function ticketRoutes(app: FastifyInstance) {
         db.$executeRawUnsafe(`UPDATE "Ticket" SET embedding = '${vecSql}'::vector WHERE id = '${ticket.id}'`).catch(() => {});
       }).catch(() => {});
 
-      return ticket;
+      return { ...ticket, tag };
     }
   );
 
@@ -121,33 +173,41 @@ export async function ticketRoutes(app: FastifyInstance) {
     const { id } = req.params;
     const { status, duplicateOf, resolveComment } = req.body;
 
-    const data: any = {};
-    if (status && VALID_STATUSES.includes(status)) {
-      data.status = status;
+    // Resolve duplicateOf: accept tag (BUG-001), short UUID, or full UUID
+    let resolvedDuplicateOf: string | undefined | null = duplicateOf;
+    if (duplicateOf) {
+      const resolved = await resolveTicketId(duplicateOf);
+      resolvedDuplicateOf = resolved ?? duplicateOf;
     }
-    if (duplicateOf !== undefined) data.duplicateOf = duplicateOf;
+
+    const data: any = {};
+    if (status && VALID_STATUSES.includes(status)) data.status = status;
+    if (duplicateOf !== undefined) data.duplicateOf = resolvedDuplicateOf;
     if (resolveComment !== undefined) data.resolveComment = resolveComment;
 
     const ticket = await db.ticket.update({ where: { id }, data }).catch(() => null);
     if (!ticket) return reply.code(404).send({ error: "Not found" });
 
-    // Auto-bump original ticket when marking as duplicate
-    if (data.status === "DUPLICATE" && duplicateOf) {
-      await db.ticket.update({ where: { id: duplicateOf }, data: { bumpCount: { increment: 1 } } }).catch(() => {});
+    // Bump original when marking as duplicate
+    if (data.status === "DUPLICATE" && resolvedDuplicateOf) {
+      await db.ticket.update({
+        where: { id: resolvedDuplicateOf },
+        data: { bumpCount: { increment: 1 } },
+      }).catch(() => {});
     }
 
     const ticketTitle = (ticket as any).title || ticket.description.slice(0, 60);
     if (data.status === "RESOLVED") {
       const comment = resolveComment?.trim();
       const resolveMsg =
-        `Тикет <code>${id.slice(0, 8)}</code> закрыт.\n\n` +
+        `Тикет <code>${(ticket as any).tag ?? id.slice(0, 8)}</code> закрыт.\n\n` +
         `<b>${ticketTitle}</b>` +
         (comment ? `\n\n<b>Комментарий:</b> ${comment}` : "") +
         `\n\nСпасибо за репорт.`;
       await notifyModerators(id, resolveMsg);
     } else if (data.status === "IN_PROGRESS") {
       const inProgressMsg =
-        `Тикет <code>${id.slice(0, 8)}</code> взят в работу.\n\n` +
+        `Тикет <code>${(ticket as any).tag ?? id.slice(0, 8)}</code> взят в работу.\n\n` +
         `<b>${ticketTitle}</b>`;
       await notifyModerators(id, inProgressMsg);
     }

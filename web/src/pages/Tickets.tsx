@@ -4,6 +4,7 @@ import { useAuth } from "../components/AuthContext";
 
 interface Ticket {
   id: string;
+  tag?: string | null;
   title?: string | null;
   description: string;
   crashReport?: string | null;
@@ -159,7 +160,7 @@ export default function Tickets() {
         </select>
 
         <input
-          placeholder="Поиск…"
+          placeholder="Поиск… (или CRH-, BUG-001)"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={{ width: 200, fontSize: 13 }}

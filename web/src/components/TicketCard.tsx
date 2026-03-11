@@ -2,6 +2,7 @@ import { useState } from "react";
 
 interface Ticket {
   id: string;
+  tag?: string | null;
   title?: string | null;
   description: string;
   crashReport?: string | null;
@@ -86,7 +87,7 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
             )}
             {ticket.duplicateOf && (
               <p style={{ fontSize: 12, color: "var(--text-3)", marginTop: 4 }}>
-                Дубликат тикета #{ticket.duplicateOf.slice(0, 8)}
+                Дубликат тикета <span style={{ fontFamily: "monospace" }}>{ticket.duplicateOf}</span>
               </p>
             )}
             {ticket.resolveComment && (
@@ -111,7 +112,7 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
           borderTop: "1px solid var(--border)",
           paddingTop: 10,
         }}>
-          <span style={{ fontFamily: "monospace", color: "var(--text-2)" }}>#{ticket.id.slice(0, 8)}</span>
+          <span style={{ fontFamily: "monospace", color: "var(--accent)", fontWeight: 600 }}>{ticket.tag ?? "#" + ticket.id.slice(0, 8)}</span>
           <span>·</span>
           <span>{ticket.reportedBy}</span>
           <span>·</span>
@@ -208,7 +209,7 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
         {duplicating && (
           <div style={{ display: "flex", gap: 8 }}>
             <input
-              placeholder="ID оригинального тикета"
+              placeholder="Тег (BUG-001) или ID тикета"
               value={dupId}
               onChange={(e) => setDupId(e.target.value)}
               style={{ flex: 1, fontSize: 13 }}
@@ -244,7 +245,7 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
               <span className={`badge ${statusClass}`}>{statusText}</span>
               <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>{categoryLabel[ticket.category] ?? ticket.category}</span>
-              <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>#{ticket.id.slice(0, 8)}</span>
+              <span style={{ fontSize: 12, fontFamily: "monospace", color: "var(--accent)", lineHeight: "22px" }}>{ticket.tag ?? "#" + ticket.id.slice(0, 8)}</span>
               <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>{ticket.reportedBy} · {date}</span>
               <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>↑ {ticket.bumpCount}</span>
             </div>
@@ -321,7 +322,7 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
 
               {ticket.duplicateOf && (
                 <p style={{ fontSize: 12, color: "var(--text-3)" }}>
-                  Дубликат тикета #{ticket.duplicateOf.slice(0, 8)}
+                  Дубликат тикета <span style={{ fontFamily: "monospace" }}>{ticket.duplicateOf}</span>
                 </p>
               )}
             </div>

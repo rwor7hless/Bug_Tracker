@@ -20,6 +20,8 @@ model Ticket {
   bumpCount   Int      @default(1)
   reportedBy  String
   telegramId  String?
+  tag         String?  @unique
+  tagNumber   Int?
   embedding   Unsupported("vector(384)")?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt

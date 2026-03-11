@@ -3,6 +3,23 @@ import db from "../../db.js";
 import { formatCategory } from "../categorize.js";
 import { embed, vectorToSql } from "../../embeddings.js";
 
+const BOT_CATEGORY_PREFIX: Record<string, string> = {
+  CRASH: "CRH", LAG: "LAG", VISUAL: "VIS", GAMEPLAY: "GME", OTHER: "BUG",
+};
+
+async function assignBotTag(ticketId: string, category: string): Promise<string> {
+  const prefix = BOT_CATEGORY_PREFIX[category] ?? "BUG";
+  const last = await db.ticket.findFirst({
+    where: { tag: { startsWith: prefix + "-" } },
+    orderBy: { tagNumber: "desc" },
+    select: { tagNumber: true },
+  });
+  const nextNum = (last?.tagNumber ?? 0) + 1;
+  const tag = `${prefix}-${nextNum <= 999 ? String(nextNum).padStart(3, "0") : nextNum}`;
+  await db.ticket.update({ where: { id: ticketId }, data: { tag, tagNumber: nextNum } });
+  return tag;
+}
+
 type Step =
   | "category"
   | "title"
@@ -102,7 +119,8 @@ async function showTicketList(ctx: Context, tickets: any[], page: number, title:
       const mark = t.status === "IN_PROGRESS" ? " [в работе]" : "";
       const label = t.title || t.description.slice(0, 50);
       const text = label.length > 50 ? label.slice(0, 50) + "…" : label;
-      return `  <code>${t.id.slice(0, 8)}</code>${mark} bumps:${t.bumpCount} — ${text}`;
+      const ref = t.tag ?? t.id.slice(0, 8);
+      return `  <code>${ref}</code>${mark} bumps:${t.bumpCount} — ${text}`;
     });
     sections.push(`<b>${header}</b>\n` + rows.join("\n"));
   }
@@ -139,7 +157,8 @@ async function checkSimilarAndProceed(ctx: Context, s: Session) {
     const statusMark = t.status === "IN_PROGRESS" ? " [в работе]" : "";
     const label = (t as any).title || t.description.slice(0, 60);
     const desc = label.length > 70 ? label.slice(0, 70) + "…" : label;
-    return `${i + 1}.${statusMark} <code>${t.id.slice(0, 8)}</code> bumps: ${t.bumpCount}\n   ${desc}`;
+    const ref = (t as any).tag ?? t.id.slice(0, 8);
+    return `${i + 1}.${statusMark} <code>${ref}</code> bumps: ${t.bumpCount}\n   ${desc}`;
   });
 
   const buttons = similar.map((t, i) => {
@@ -235,15 +254,29 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
 
   if (s.step === "search_query") {
     s.step = undefined;
-    const allTickets = await db.ticket.findMany({
-      where: { status: { in: ["OPEN", "IN_PROGRESS"] as any[] } },
-      orderBy: { bumpCount: "desc" },
-    });
-    const tokens = text.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 2);
-    const results = allTickets.filter((t: any) => {
-      const haystack = [(t.title || ""), t.description].join(" ").toLowerCase();
-      return tokens.some((tok: string) => haystack.includes(tok));
-    });
+    let results: any[];
+
+    // Tag search: "CRH-", "BUG-001", etc.
+    const TAG_PREFIXES_BOT = new Set(["CRH", "LAG", "VIS", "GME", "BUG"]);
+    const tagMatch = text.trim().match(/^([A-Z]{2,4})-(\d*)$/i);
+    if (tagMatch && TAG_PREFIXES_BOT.has(tagMatch[1].toUpperCase())) {
+      const tagQuery = tagMatch[1].toUpperCase() + "-" + tagMatch[2];
+      results = await db.ticket.findMany({
+        where: { tag: { startsWith: tagQuery } },
+        orderBy: { bumpCount: "desc" },
+      });
+    } else {
+      const allTickets = await db.ticket.findMany({
+        where: { status: { in: ["OPEN", "IN_PROGRESS"] as any[] } },
+        orderBy: { bumpCount: "desc" },
+      });
+      const tokens = text.toLowerCase().split(/\s+/).filter((w: string) => w.length >= 2);
+      results = allTickets.filter((t: any) => {
+        const haystack = [(t.title || ""), t.description].join(" ").toLowerCase();
+        return tokens.some((tok: string) => haystack.includes(tok));
+      });
+    }
+
     if (!results.length) {
       await ctx.reply("По запросу <b>" + text + "</b> ничего не найдено.", {
         parse_mode: "HTML",
@@ -258,9 +291,12 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
   }
 
   if (s.step === "bump_id") {
-    const ticket = await db.ticket.findFirst({
-      where: text.length < 36 ? { id: { startsWith: text } } : { id: text },
-    });
+    const isTag = /^[A-Z]{2,4}-\d+$/i.test(text);
+    const ticket = isTag
+      ? await db.ticket.findUnique({ where: { tag: text.toUpperCase() } })
+      : await db.ticket.findFirst({
+          where: text.length < 36 ? { id: { startsWith: text } } : { id: text },
+        });
     if (!ticket) {
       await ctx.reply("Тикет не найден.", {
         reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
@@ -273,7 +309,7 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
     s.step = undefined;
     await ctx.reply(
       "Bump засчитан.\n\n" +
-        "ID: <code>" + ticket.id.slice(0, 8) + "</code>\n" +
+        "🏷 <code>" + ((ticket as any).tag ?? ticket.id.slice(0, 8)) + "</code>\n" +
         ticket.description.slice(0, 80) + (ticket.description.length > 80 ? "…" : "") + "\n\n" +
         "Встречали: <b>" + updated.bumpCount + "</b> раз(а) · " + who,
       {
@@ -350,7 +386,8 @@ export async function reportCallbackHandler(ctx: Context) {
 
   if (data === "menu_bump") {
     s.step = "bump_id";
-    return ctx.reply("Введи ID тикета (первые 8 символов):", {
+    return ctx.reply("Введи тег тикета (например <code>BUG-001</code>) или первые 8 символов ID:", {
+      parse_mode: "HTML",
       reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
     });
   }
@@ -457,6 +494,10 @@ async function submitTicket(ctx: Context, title: string | undefined, description
   const ticket = await db.ticket.create({
     data: { title, description, crashReport, reportedBy, category: category as any, telegramId },
   });
+
+  // Assign tag synchronously (fast DB op)
+  const tag = await assignBotTag(ticket.id, category).catch(() => null);
+
   // Generate and store embedding asynchronously (don't block reply)
   const embText = [title, description].filter(Boolean).join(" ");
   embed(embText, "passage").then((vec) => {
@@ -467,10 +508,11 @@ async function submitTicket(ctx: Context, title: string | undefined, description
   const logType = crashReport
     ? crashReport.startsWith("http") ? "ссылка" : crashReport.startsWith("[Файл") ? "файл" : "текст"
     : "нет";
+  const ticketRef = tag ?? ticket.id.slice(0, 8);
   await ctx.reply(
     "Тикет создан.\n\n" +
       (title ? "Название: <b>" + title + "</b>\n" : "") +
-      "ID: <code>" + ticket.id + "</code>\n" +
+      "🏷 <code>" + ticketRef + "</code>\n" +
       "Категория: " + catFormatted + "\n" +
       "Лог: " + logType + "\n" +
       "Автор: " + reportedBy,
