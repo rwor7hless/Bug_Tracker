@@ -49,6 +49,35 @@ const statusMeta: Record<string, { cls: string; text: string }> = {
   RESOLVED:    { cls: "badge-resolved", text: "Решено" },
 };
 
+function CopyTag({ tag }: { tag: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function copy(e: React.MouseEvent) {
+    e.stopPropagation();
+    navigator.clipboard.writeText(tag).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    });
+  }
+
+  return (
+    <span
+      onClick={copy}
+      title="Нажми, чтобы скопировать"
+      style={{
+        fontFamily: "monospace",
+        color: copied ? "var(--text-2)" : "var(--accent)",
+        fontWeight: 600,
+        cursor: "pointer",
+        userSelect: "none",
+        transition: "color 0.15s",
+      }}
+    >
+      {copied ? "✓ скопировано" : tag}
+    </span>
+  );
+}
+
 function PhotoCarousel({ photos, isAdmin, onDelete }: { photos: TicketPhoto[]; isAdmin: boolean; onDelete?: (id: string) => void }) {
   const [current, setCurrent] = useState(0);
   if (!photos.length) return null;
@@ -240,7 +269,7 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
           borderTop: "1px solid var(--border)",
           paddingTop: 10,
         }}>
-          <span style={{ fontFamily: "monospace", color: "var(--accent)", fontWeight: 600 }}>{ticket.tag ?? "#" + ticket.id.slice(0, 8)}</span>
+          <CopyTag tag={ticket.tag ?? "#" + ticket.id.slice(0, 8)} />
           <span>·</span>
           <span>{ticket.reportedBy}</span>
           <span>·</span>
@@ -379,7 +408,7 @@ export default function TicketCard({ ticket, isAdmin, onBump, onInProgress, onRe
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
               <span className={`badge ${statusClass}`}>{statusText}</span>
               <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>{categoryLabel[ticket.category] ?? ticket.category}</span>
-              <span style={{ fontSize: 12, fontFamily: "monospace", color: "var(--accent)", lineHeight: "22px" }}>{ticket.tag ?? "#" + ticket.id.slice(0, 8)}</span>
+              <CopyTag tag={ticket.tag ?? "#" + ticket.id.slice(0, 8)} />
               <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>{ticket.reportedBy} · {date}</span>
               <span style={{ fontSize: 12, color: "var(--text-3)", lineHeight: "22px" }}>↑ {ticket.bumpCount}</span>
             </div>
