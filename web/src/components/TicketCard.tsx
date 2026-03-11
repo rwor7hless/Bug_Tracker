@@ -54,10 +54,22 @@ function CopyTag({ tag }: { tag: string }) {
 
   function copy(e: React.MouseEvent) {
     e.stopPropagation();
-    navigator.clipboard.writeText(tag).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1200);
-    });
+    const done = () => { setCopied(true); setTimeout(() => setCopied(false), 1200); };
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(tag).then(done).catch(() => fallback());
+    } else {
+      fallback();
+    }
+    function fallback() {
+      const el = document.createElement("textarea");
+      el.value = tag;
+      el.style.cssText = "position:fixed;top:-9999px;left:-9999px";
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      done();
+    }
   }
 
   return (
