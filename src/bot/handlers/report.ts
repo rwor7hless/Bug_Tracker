@@ -192,11 +192,23 @@ async function showTicketList(ctx: Context, s: Session, tickets: any[], page: nu
   );
 }
 
-async function checkSimilarAndProceed(ctx: Context, s: Session) {
+async function showCrashPrompt(ctx: Context, s: Session) {
+  s.step = "crash_prompt";
+  await botSend(ctx, s, "Есть лог / краш-репорт?", {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "Да", callback_data: "crash_yes" }, { text: "Нет", callback_data: "crash_no" }],
+        [{ text: "Отмена", callback_data: "menu_back" }],
+      ],
+    },
+  });
+}
+
+async function checkSimilarAfterDescription(ctx: Context, s: Session) {
   const similar = await findSimilar(s.title ? s.title + " " + s.description! : s.description!, s.category!);
 
   if (!similar.length) {
-    await submitTicket(ctx, s, s.title, s.description!, s.category!, s.pendingCrashReport);
+    await showCrashPrompt(ctx, s);
     return;
   }
 
@@ -281,15 +293,7 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
 
   if (s.step === "description") {
     s.description = text;
-    s.step = "crash_prompt";
-    await botSend(ctx, s, "Описание принято.\n\nЕсть лог / краш-репорт?", {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "Да", callback_data: "crash_yes" }, { text: "Нет", callback_data: "crash_no" }],
-          [{ text: "Отмена", callback_data: "menu_back" }],
-        ],
-      },
-    });
+    await checkSimilarAfterDescription(ctx, s);
     return true;
   }
 
@@ -301,13 +305,13 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
       return true;
     }
     s.pendingCrashReport = text;
-    await checkSimilarAndProceed(ctx, s);
+    await submitTicket(ctx, s, s.title, s.description!, s.category!, s.pendingCrashReport);
     return true;
   }
 
   if (s.step === "crash_text") {
     s.pendingCrashReport = text;
-    await checkSimilarAndProceed(ctx, s);
+    await submitTicket(ctx, s, s.title, s.description!, s.category!, s.pendingCrashReport);
     return true;
   }
 
@@ -478,7 +482,7 @@ export async function reportCallbackHandler(ctx: Context) {
 
   if (data === "crash_no" && s.step === "crash_prompt") {
     s.pendingCrashReport = undefined;
-    await checkSimilarAndProceed(ctx, s);
+    await submitTicket(ctx, s, s.title, s.description!, s.category!, undefined);
     return;
   }
 
@@ -545,13 +549,8 @@ export async function reportCallbackHandler(ctx: Context) {
   }
 
   if (data === "similar_none" && s.step === "similar_check") {
-    const title = s.title;
-    const desc = s.description!;
-    const cat = s.category!;
-    const crash = s.pendingCrashReport;
     s.similarIds = undefined;
-    s.step = undefined;
-    await submitTicket(ctx, s, title, desc, cat, crash);
+    await showCrashPrompt(ctx, s);
     return;
   }
 }
@@ -622,7 +621,7 @@ export async function reportDocumentHandler(ctx: Context) {
   } catch {
     s.pendingCrashReport = "[Файл: " + fileName + ", id: " + fileId + "]";
   }
-  await checkSimilarAndProceed(ctx, s);
+  await submitTicket(ctx, s, s.title, s.description!, s.category!, s.pendingCrashReport);
 }
 
 // --- Submit ---
