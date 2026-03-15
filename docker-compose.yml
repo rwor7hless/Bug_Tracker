@@ -10,6 +10,7 @@ services:
       POSTGRES_PASSWORD: bugreport
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U bugreport"]
       interval: 5s

@@ -16,6 +16,7 @@ model Ticket {
   resolveComment String?
   status      Status   @default(OPEN)
   category    Category @default(OTHER)
+  urgency     Urgency  @default(NORMAL)
   duplicateOf String?
   bumpCount   Int      @default(1)
   reportedBy  String
@@ -25,7 +26,9 @@ model Ticket {
   embedding   Unsupported("vector(384)")?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  photosDeleted Boolean @default(false)
   photos      TicketPhoto[]
+  comments    TicketComment[]
 }
 
 model TicketPhoto {
@@ -50,6 +53,13 @@ enum Category {
   VISUAL
   GAMEPLAY
   OTHER
+  SUGGESTION
+}
+
+enum Urgency {
+  NORMAL
+  HIGH
+  CRITICAL
 }
 
 model User {
@@ -58,6 +68,17 @@ model User {
   passwordHash String
   role         Role     @default(MODERATOR)
   createdAt    DateTime @default(now())
+  comments     TicketComment[]
+}
+
+model TicketComment {
+  id        String   @id @default(uuid())
+  ticketId  String
+  ticket    Ticket   @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  body      String
+  createdAt DateTime @default(now())
 }
 
 enum Role {

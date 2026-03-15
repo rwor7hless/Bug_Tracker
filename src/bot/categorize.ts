@@ -1,4 +1,4 @@
-type Category = "CRASH" | "LAG" | "VISUAL" | "GAMEPLAY" | "OTHER";
+type Category = "CRASH" | "LAG" | "VISUAL" | "GAMEPLAY" | "OTHER" | "SUGGESTION";
 
 const rules: { category: Category; keywords: string[] }[] = [
   {
@@ -17,6 +17,10 @@ const rules: { category: Category; keywords: string[] }[] = [
     category: "GAMEPLAY",
     keywords: ["дюп", "dup", "exploit", "эксплойт", "баланс", "balance", "механик", "mechanic", "предмет", "item", "квест", "quest", "крафт", "craft"],
   },
+  {
+    category: "SUGGESTION",
+    keywords: ["предложение", "улучшение", "suggestion", "feature", "перевод", "несостыковк", "новый билд", "геймплей улучш"],
+  },
 ];
 
 export function detectCategory(text: string): Category {
@@ -33,6 +37,7 @@ const categoryLabel: Record<Category, string> = {
   VISUAL: "Визуал",
   GAMEPLAY: "Геймплей",
   OTHER: "Другое",
+  SUGGESTION: "Предложение",
 };
 
 export function formatCategory(cat: Category): string {

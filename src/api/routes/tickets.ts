@@ -13,14 +13,17 @@ export function getUploadDir(): string {
 }
 
 const VALID_STATUSES = ["OPEN", "IN_PROGRESS", "DUPLICATE", "RESOLVED"];
+const VALID_CATEGORIES = ["CRASH", "LAG", "VISUAL", "GAMEPLAY", "OTHER", "SUGGESTION"];
+const VALID_URGENCIES = ["NORMAL", "HIGH", "CRITICAL"];
 
 // --- Tag helpers ---
 const CATEGORY_PREFIX: Record<string, string> = {
-  CRASH:    "CRH",
-  LAG:      "LAG",
-  VISUAL:   "VIS",
-  GAMEPLAY: "GME",
-  OTHER:    "BUG",
+  CRASH:      "CRH",
+  LAG:        "LAG",
+  VISUAL:     "VIS",
+  GAMEPLAY:   "GME",
+  OTHER:      "BUG",
+  SUGGESTION: "SUG",
 };
 const TAG_PREFIXES = new Set(Object.values(CATEGORY_PREFIX));
 
@@ -68,10 +71,41 @@ async function notifyModerators(ticketId: string, message: string, excludeTelegr
 const PHOTO_INCLUDE = { photos: { orderBy: { order: "asc" as const } } };
 
 export async function ticketRoutes(app: FastifyInstance) {
+  app.get<{ Querystring: { text: string; category?: string } }>(
+    "/api/tickets/similar",
+    { preHandler: requireAuth },
+    async (req) => {
+      const { text, category } = req.query;
+      if (!text?.trim()) return [];
+      try {
+        const vec = await embed(text.trim(), "query");
+        const vecSql = vectorToSql(vec);
+        const categoryClause = category && VALID_CATEGORIES.includes(category)
+          ? `AND category = '${category}'`
+          : "";
+        const rows = await db.$queryRawUnsafe<Array<{ id: string; similarity: number }>>(`
+          SELECT id, 1 - (embedding <=> '${vecSql}'::vector) AS similarity
+          FROM "Ticket"
+          WHERE status IN ('OPEN', 'IN_PROGRESS')
+            AND embedding IS NOT NULL
+            ${categoryClause}
+          ORDER BY embedding <=> '${vecSql}'::vector
+          LIMIT 5
+        `);
+        const ids = rows.filter(r => r.similarity >= 0.75).map(r => r.id);
+        if (!ids.length) return [];
+        return db.ticket.findMany({ where: { id: { in: ids } }, orderBy: { bumpCount: "desc" } });
+      } catch {
+        return [];
+      }
+    }
+  );
+
   app.get<{
-    Querystring: { status?: string; sort?: string; search?: string };
+    Querystring: { status?: string; sort?: string; search?: string; category?: string };
   }>("/api/tickets", { preHandler: requireAuth }, async (req) => {
-    const { status, sort, search } = req.query;
+    const { status, sort, search, category } = req.query;
+    const categoryFilter = category && VALID_CATEGORIES.includes(category) ? category : null;
 
     if (search?.trim()) {
       const statusFilter = status && VALID_STATUSES.includes(status) ? status : null;
@@ -85,6 +119,7 @@ export async function ticketRoutes(app: FastifyInstance) {
         const tagQuery = num ? `${prefix}-${num}` : `${prefix}-`;
         const where: any = { tag: { startsWith: tagQuery } };
         if (statusFilter) where.status = statusFilter;
+        if (categoryFilter) where.category = categoryFilter;
         return db.ticket.findMany({ where, orderBy, include: PHOTO_INCLUDE });
       }
 
@@ -93,10 +128,11 @@ export async function ticketRoutes(app: FastifyInstance) {
         const vec = await embed(search.trim(), "query");
         const vecSql = vectorToSql(vec);
         const statusClause = statusFilter ? `AND status = '${statusFilter}'` : "";
+        const categoryClause = categoryFilter ? `AND category = '${categoryFilter}'` : "";
         const rows = await db.$queryRawUnsafe<any[]>(`
           SELECT id, 1 - (embedding <=> '${vecSql}'::vector) AS _sim
           FROM "Ticket"
-          WHERE embedding IS NOT NULL ${statusClause}
+          WHERE embedding IS NOT NULL ${statusClause} ${categoryClause}
             AND 1 - (embedding <=> '${vecSql}'::vector) >= 0.65
           ORDER BY embedding <=> '${vecSql}'::vector
           LIMIT 50
@@ -121,6 +157,7 @@ export async function ticketRoutes(app: FastifyInstance) {
       const tokens = search.trim().toLowerCase().split(/\s+/).filter((t: string) => t.length >= 2 && !STOP_WORDS.has(t));
       const where: any = {};
       if (statusFilter) where.status = statusFilter;
+      if (categoryFilter) where.category = categoryFilter;
       where.OR = (tokens.length ? tokens : [search]).flatMap((token: string) => [
         { title: { contains: token, mode: "insensitive" } },
         { description: { contains: token, mode: "insensitive" } },
@@ -132,6 +169,7 @@ export async function ticketRoutes(app: FastifyInstance) {
     // No search — normal filter
     const where: any = {};
     if (status && VALID_STATUSES.includes(status)) where.status = status;
+    if (categoryFilter) where.category = categoryFilter;
     const orderBy: any = sort === "bumps" ? { bumpCount: "desc" } : { createdAt: "desc" };
     return db.ticket.findMany({ where, orderBy, include: PHOTO_INCLUDE });
   });
@@ -159,18 +197,18 @@ export async function ticketRoutes(app: FastifyInstance) {
     return { total, byStatus, byCategory, recentResolved };
   });
 
-  app.post<{ Body: { title?: string; description: string; crashReport?: string; category?: string; reportedBy?: string } }>(
+  app.post<{ Body: { title: string; description?: string; crashReport?: string; category?: string; reportedBy?: string } }>(
     "/api/tickets",
     { preHandler: requireAuth },
     async (req, reply) => {
       const { title, description, crashReport, category } = req.body;
       const jwtUser = (req as any).user as { username: string } | undefined;
       const reportedBy = req.body.reportedBy || jwtUser?.username || "web";
-      if (!description) return reply.code(400).send({ error: "description required" });
+      if (!title) return reply.code(400).send({ error: "title required" });
 
       const cat = (category as any) || "OTHER";
       const ticket = await db.ticket.create({
-        data: { title, description, crashReport, reportedBy, category: cat },
+        data: { title, description: description ?? "", crashReport, reportedBy, category: cat },
         include: PHOTO_INCLUDE,
       });
 
@@ -178,7 +216,7 @@ export async function ticketRoutes(app: FastifyInstance) {
       const tag = await assignTag(ticket.id, cat).catch(() => null);
 
       // Generate embedding asynchronously
-      const embText = [title, description].filter(Boolean).join(" ");
+      const embText = [title, description].filter(Boolean).join(" ") || title;
       embed(embText, "passage").then((vec) => {
         const vecSql = vectorToSql(vec);
         db.$executeRawUnsafe(`UPDATE "Ticket" SET embedding = '${vecSql}'::vector WHERE id = '${ticket.id}'`).catch(() => {});
@@ -190,10 +228,15 @@ export async function ticketRoutes(app: FastifyInstance) {
 
   app.patch<{
     Params: { id: string };
-    Body: { status?: string; duplicateOf?: string; resolveComment?: string };
+    Body: {
+      status?: string; duplicateOf?: string; resolveComment?: string;
+      title?: string; description?: string; crashReport?: string;
+      category?: string; urgency?: string;
+    };
   }>("/api/tickets/:id", { preHandler: requireAuth }, async (req, reply) => {
     const { id } = req.params;
-    const { status, duplicateOf, resolveComment } = req.body;
+    const { status, duplicateOf, resolveComment, title, description, crashReport, category, urgency } = req.body;
+    const jwtUser = (req as any).user as { id: string; username: string; role: string };
 
     // Resolve duplicateOf: accept tag (BUG-001), short UUID, or full UUID
     let resolvedDuplicateOf: string | undefined | null = duplicateOf;
@@ -202,13 +245,44 @@ export async function ticketRoutes(app: FastifyInstance) {
       resolvedDuplicateOf = resolved ?? duplicateOf;
     }
 
+    const existing = await db.ticket.findUnique({ where: { id }, select: { reportedBy: true } });
+    if (!existing) return reply.code(404).send({ error: "Not found" });
+
+    // Moderators can only edit their own tickets
+    const isAdmin = jwtUser.role === "ADMIN";
+    const isOwner = existing.reportedBy === jwtUser.username;
+    if (!isAdmin && !isOwner && (title !== undefined || description !== undefined || crashReport !== undefined || category || urgency)) {
+      return reply.code(403).send({ error: "Forbidden" });
+    }
+
     const data: any = {};
-    if (status && VALID_STATUSES.includes(status)) data.status = status;
-    if (duplicateOf !== undefined) data.duplicateOf = resolvedDuplicateOf;
-    if (resolveComment !== undefined) data.resolveComment = resolveComment;
+    // Status changes — admin only
+    if (isAdmin) {
+      if (status && VALID_STATUSES.includes(status)) data.status = status;
+      if (duplicateOf !== undefined) data.duplicateOf = resolvedDuplicateOf;
+      if (resolveComment !== undefined) data.resolveComment = resolveComment;
+    }
+    // Content fields — admin or ticket owner
+    if (isAdmin || isOwner) {
+      if (title !== undefined) data.title = title;
+      if (description !== undefined) data.description = description;
+      if (crashReport !== undefined) data.crashReport = crashReport;
+      if (category && VALID_CATEGORIES.includes(category)) data.category = category;
+      if (urgency && VALID_URGENCIES.includes(urgency)) data.urgency = urgency;
+    }
 
     const ticket = await db.ticket.update({ where: { id }, data }).catch(() => null);
     if (!ticket) return reply.code(404).send({ error: "Not found" });
+
+    // Regenerate embedding if title or description changed
+    if (title !== undefined || description !== undefined) {
+      const updatedTicket = ticket as any;
+      const embText = [updatedTicket.title, updatedTicket.description].filter(Boolean).join(" ");
+      embed(embText, "passage").then((vec) => {
+        const vecSql = vectorToSql(vec);
+        db.$executeRawUnsafe(`UPDATE "Ticket" SET embedding = '${vecSql}'::vector WHERE id = '${id}'`).catch(() => {});
+      }).catch(() => {});
+    }
 
     // Bump original when marking as duplicate
     if (data.status === "DUPLICATE" && resolvedDuplicateOf) {
@@ -256,7 +330,17 @@ export async function ticketRoutes(app: FastifyInstance) {
     "/api/tickets/:id",
     { preHandler: requireAuth },
     async (req, reply) => {
-      await db.ticket.delete({ where: { id: req.params.id } }).catch(() => null);
+      const ticket = await db.ticket.findUnique({
+        where: { id: req.params.id },
+        include: { photos: true },
+      });
+      if (ticket) {
+        const uploadDir = getUploadDir();
+        for (const photo of ticket.photos) {
+          await fs.unlink(path.join(uploadDir, photo.filename)).catch(() => {});
+        }
+        await db.ticket.delete({ where: { id: req.params.id } });
+      }
       return reply.code(204).send();
     }
   );
@@ -306,6 +390,57 @@ export async function ticketRoutes(app: FastifyInstance) {
       await fs.unlink(path.join(uploadDir, photo.filename)).catch(() => {});
       await db.ticketPhoto.delete({ where: { id: photoId } });
       return reply.code(204).send();
+    }
+  );
+
+  // --- Comments ---
+  app.get<{ Params: { id: string } }>(
+    "/api/tickets/:id/comments",
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const ticket = await db.ticket.findUnique({ where: { id: req.params.id }, select: { id: true } });
+      if (!ticket) return reply.code(404).send({ error: "Not found" });
+      return db.ticketComment.findMany({
+        where: { ticketId: req.params.id },
+        orderBy: { createdAt: "asc" },
+        include: { user: { select: { username: true, role: true } } },
+      });
+    }
+  );
+
+  app.post<{ Params: { id: string }; Body: { body: string } }>(
+    "/api/tickets/:id/comments",
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const jwtUser = (req as any).user as { id: string; username: string; role: string };
+      const { body } = req.body;
+      if (!body?.trim()) return reply.code(400).send({ error: "body required" });
+
+      const ticket = await db.ticket.findUnique({
+        where: { id: req.params.id },
+        select: { id: true, tag: true, title: true, description: true, telegramId: true },
+      });
+      if (!ticket) return reply.code(404).send({ error: "Not found" });
+
+      const comment = await db.ticketComment.create({
+        data: { ticketId: ticket.id, userId: jwtUser.id, body: body.trim() },
+        include: { user: { select: { username: true, role: true } } },
+      });
+
+      // Notify ticket reporter via Telegram when admin posts a comment
+      if (jwtUser.role === "ADMIN" && ticket.telegramId) {
+        const { getBot } = await import("../../bot/botInstance.js");
+        const bot = getBot();
+        const ticketRef = ticket.tag ?? ticket.id.slice(0, 8);
+        const ticketTitle = ticket.title || ticket.description.slice(0, 60);
+        bot?.telegram.sendMessage(
+          ticket.telegramId,
+          `💬 Новый комментарий к вашему тикету <code>${ticketRef}</code>\n<b>${ticketTitle}</b>\n\n${body.trim()}`,
+          { parse_mode: "HTML" }
+        ).catch(() => {});
+      }
+
+      return comment;
     }
   );
 }

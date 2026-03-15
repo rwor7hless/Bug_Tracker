@@ -15,11 +15,12 @@ const STATUS_META: { key: string; label: string; color: string }[] = [
 ];
 
 const CATEGORY_META: { key: string; label: string }[] = [
-  { key: "CRASH",    label: "Краш" },
-  { key: "LAG",      label: "Лаги" },
-  { key: "VISUAL",   label: "Визуал" },
-  { key: "GAMEPLAY", label: "Геймплей" },
-  { key: "OTHER",    label: "Другое" },
+  { key: "CRASH",      label: "Краш" },
+  { key: "LAG",        label: "Лаги" },
+  { key: "VISUAL",     label: "Визуал" },
+  { key: "GAMEPLAY",   label: "Геймплей" },
+  { key: "OTHER",      label: "Другое" },
+  { key: "SUGGESTION", label: "Предложение" },
 ];
 
 export default function Statistics() {

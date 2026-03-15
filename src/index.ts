@@ -13,6 +13,7 @@ import { ticketRoutes } from "./api/routes/tickets.js";
 import { userRoutes } from "./api/routes/users.js";
 import { moderatorRoutes } from "./api/routes/moderators.js";
 import { startBot } from "./bot/index.js";
+import { scheduleWeeklyCleanup } from "./cleanup.js";
 import db from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -64,3 +65,4 @@ const port = parseInt(process.env.PORT || "3000");
 await app.listen({ port, host: "0.0.0.0" });
 
 startBot();
+scheduleWeeklyCleanup();

@@ -7,7 +7,7 @@ import path from "path";
 import { getUploadDir } from "../../api/routes/tickets.js";
 
 const BOT_CATEGORY_PREFIX: Record<string, string> = {
-  CRASH: "CRH", LAG: "LAG", VISUAL: "VIS", GAMEPLAY: "GME", OTHER: "BUG",
+  CRASH: "CRH", LAG: "LAG", VISUAL: "VIS", GAMEPLAY: "GME", OTHER: "BUG", SUGGESTION: "SUG",
 };
 
 async function assignBotTag(ticketId: string, category: string): Promise<string> {
@@ -27,6 +27,7 @@ type Step =
   | "category"
   | "title"
   | "description"
+  | "urgency"
   | "crash_prompt"
   | "crash_type"
   | "crash_link"
@@ -42,6 +43,7 @@ type Session = {
   title?: string;
   description?: string;
   category?: string;
+  urgency?: string;
   pendingCrashReport?: string;
   pendingTicketId?: string;
   pendingPhotoFileIds?: string[];
@@ -53,11 +55,12 @@ type Session = {
 };
 
 const CATS = [
-  { label: "Краш",     value: "CRASH" },
-  { label: "Лаги",     value: "LAG" },
-  { label: "Визуал",   value: "VISUAL" },
-  { label: "Геймплей", value: "GAMEPLAY" },
-  { label: "Другое",   value: "OTHER" },
+  { label: "Краш",        value: "CRASH" },
+  { label: "Лаги",        value: "LAG" },
+  { label: "Визуал",      value: "VISUAL" },
+  { label: "Геймплей",    value: "GAMEPLAY" },
+  { label: "Другое",      value: "OTHER" },
+  { label: "📝 Предложение", value: "SUGGESTION" },
 ];
 
 function catKb() {
@@ -66,37 +69,38 @@ function catKb() {
       CATS.slice(0, 2).map(c => ({ text: c.label, callback_data: "cat_" + c.value })),
       CATS.slice(2, 4).map(c => ({ text: c.label, callback_data: "cat_" + c.value })),
       [{ text: CATS[4].label, callback_data: "cat_" + CATS[4].value }],
+      [{ text: CATS[5].label, callback_data: "cat_" + CATS[5].value }],
       [{ text: "Назад", callback_data: "menu_back" }],
     ],
   };
 }
 
 // --- Single-message helper ---
+// Always edits the existing menu message in-place.
+// If editing fails (message deleted / too old), deletes the stale message and sends a fresh one.
 async function botSend(ctx: Context, s: Session, text: string, extra: any) {
   const c = ctx as any;
 
+  // Prefer the message that triggered the callback, fall back to session-tracked message.
   const cbMsg = c.callbackQuery?.message;
-  if (cbMsg) {
+  const targetChatId: number | undefined = cbMsg?.chat?.id ?? s.chatId;
+  const targetMsgId: number | undefined = cbMsg?.message_id ?? s.menuMsgId;
+
+  if (targetChatId && targetMsgId) {
     try {
-      await ctx.telegram.editMessageText(cbMsg.chat.id, cbMsg.message_id, undefined, text, extra);
-      s.menuMsgId = cbMsg.message_id;
-      s.chatId = cbMsg.chat.id;
+      await ctx.telegram.editMessageText(targetChatId, targetMsgId, undefined, text, extra);
+      s.menuMsgId = targetMsgId;
+      s.chatId = targetChatId;
       return;
     } catch (e: any) {
       if (e?.description?.includes("message is not modified")) return;
+      // Edit failed (message deleted or too old) — remove stale keyboard and send fresh message.
+      await tryDelete(ctx, targetChatId, targetMsgId);
+      s.menuMsgId = undefined;
     }
   }
 
-  if (s.menuMsgId && s.chatId) {
-    try {
-      await ctx.telegram.editMessageText(s.chatId, s.menuMsgId, undefined, text, extra);
-      return;
-    } catch (e: any) {
-      if (e?.description?.includes("message is not modified")) return;
-    }
-  }
-
-  const chatId = s.chatId ?? c.message?.chat?.id ?? c.chat?.id;
+  const chatId = targetChatId ?? c.message?.chat?.id ?? c.chat?.id;
   if (chatId) {
     const msg = await ctx.telegram.sendMessage(chatId, text, extra);
     s.menuMsgId = msg.message_id;
@@ -138,6 +142,7 @@ function clearSession(s: Session) {
   s.title = undefined;
   s.description = undefined;
   s.category = undefined;
+  s.urgency = undefined;
   s.pendingCrashReport = undefined;
   s.pendingTicketId = undefined;
   s.pendingPhotoFileIds = undefined;
@@ -153,7 +158,7 @@ async function showTicketList(ctx: Context, s: Session, tickets: any[], page: nu
   const total = tickets.length;
   const totalPages = Math.max(1, Math.ceil(total / LIST_PAGE_SIZE));
   const pageTickets = tickets.slice(page * LIST_PAGE_SIZE, (page + 1) * LIST_PAGE_SIZE);
-  const CAT_ORDER = ["CRASH", "LAG", "VISUAL", "GAMEPLAY", "OTHER"];
+  const CAT_ORDER = ["CRASH", "LAG", "VISUAL", "GAMEPLAY", "OTHER", "SUGGESTION"];
 
   const groups: Record<string, typeof pageTickets> = {};
   for (const t of pageTickets) {
@@ -183,6 +188,10 @@ async function showTicketList(ctx: Context, s: Session, tickets: any[], page: nu
     if (page < totalPages - 1) row.push({ text: "Вперёд →", callback_data: `list_page_${page + 1}` });
     nav.push(row);
   }
+  nav.push([
+    { text: "🔍 Поиск", callback_data: "menu_search" },
+    { text: "↑ Bump", callback_data: "menu_bump" },
+  ]);
   nav.push([{ text: "В меню", callback_data: "menu_back" }]);
 
   return botSend(
@@ -190,6 +199,20 @@ async function showTicketList(ctx: Context, s: Session, tickets: any[], page: nu
     `<b>${title}</b> (${total})\n\n` + (sections.join("\n\n") || "Нет тикетов."),
     { parse_mode: "HTML", reply_markup: { inline_keyboard: nav } }
   );
+}
+
+async function showUrgencyPrompt(ctx: Context, s: Session) {
+  s.step = "urgency";
+  await botSend(ctx, s, "Укажи срочность:", {
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "🟢 Обычная", callback_data: "urgency_NORMAL" }],
+        [{ text: "🟡 Высокая", callback_data: "urgency_HIGH" }],
+        [{ text: "🔴 Критичная", callback_data: "urgency_CRITICAL" }],
+        [{ text: "Отмена", callback_data: "menu_back" }],
+      ],
+    },
+  });
 }
 
 async function showCrashPrompt(ctx: Context, s: Session) {
@@ -208,7 +231,7 @@ async function checkSimilarAfterDescription(ctx: Context, s: Session) {
   const similar = await findSimilar(s.title ? s.title + " " + s.description! : s.description!, s.category!);
 
   if (!similar.length) {
-    await showCrashPrompt(ctx, s);
+    await showUrgencyPrompt(ctx, s);
     return;
   }
 
@@ -247,16 +270,14 @@ export async function showMainMenu(ctx: Context) {
   clearSession(s);
   return botSend(
     ctx, s,
-    "<b>Bug Report</b>\n\nЧто хочешь сделать?",
+    "🐛 <b>Bug Tracker</b>",
     {
       parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "Создать баг-репорт", callback_data: "menu_report" }],
-          [{ text: "Список открытых багов", callback_data: "menu_list_0" }],
-          [{ text: "Поиск по тикетам", callback_data: "menu_search" }],
-          [{ text: "Bump тикета", callback_data: "menu_bump" }],
-          [{ text: "Пароль для панели", callback_data: "menu_password" }],
+          [{ text: "📝 Создать репорт", callback_data: "menu_report" }],
+          [{ text: "📋 Тикеты", callback_data: "menu_list_0" }],
+          [{ text: "🔑 Пароль для панели", callback_data: "menu_password" }],
         ],
       },
     }
@@ -285,7 +306,10 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
     }
     s.title = text;
     s.step = "description";
-    await botSend(ctx, s, "Название принято.\n\nТеперь опиши баг подробно: что произошло, как воспроизвести:", {
+    const descPrompt = s.category === "SUGGESTION"
+      ? "Название принято.\n\nОпиши предложение подробно: что именно ты хочешь улучшить и почему это важно:"
+      : "Название принято.\n\nТеперь опиши баг подробно: что произошло, как воспроизвести:";
+    await botSend(ctx, s, descPrompt, {
       reply_markup: { inline_keyboard: [[{ text: "Отмена", callback_data: "menu_back" }]] },
     });
     return true;
@@ -319,7 +343,7 @@ export async function reportTextHandler(ctx: Context): Promise<boolean> {
     s.step = undefined;
     let results: any[];
 
-    const TAG_PREFIXES_BOT = new Set(["CRH", "LAG", "VIS", "GME", "BUG"]);
+    const TAG_PREFIXES_BOT = new Set(["CRH", "LAG", "VIS", "GME", "BUG", "SUG"]);
     const tagMatch = text.trim().match(/^([A-Z]{2,4})-(\d*)$/i);
     if (tagMatch && TAG_PREFIXES_BOT.has(tagMatch[1].toUpperCase())) {
       const tagQuery = tagMatch[1].toUpperCase() + "-" + tagMatch[2];
@@ -462,7 +486,10 @@ export async function reportCallbackHandler(ctx: Context) {
     const cat = data.slice(4);
     s.category = cat; s.step = "title";
     const catLabel = CATS.find(c => c.value === cat)?.label ?? cat;
-    return botSend(ctx, s, catLabel + "\n\nВведи краткое название бага (до 100 символов):", {
+    const titlePrompt = cat === "SUGGESTION"
+      ? catLabel + "\n\nКратко опиши своё предложение (до 100 символов):"
+      : catLabel + "\n\nВведи краткое название бага (до 100 символов):";
+    return botSend(ctx, s, titlePrompt, {
       reply_markup: { inline_keyboard: [[{ text: "К категориям", callback_data: "menu_report" }]] },
     });
   }
@@ -550,7 +577,19 @@ export async function reportCallbackHandler(ctx: Context) {
 
   if (data === "similar_none" && s.step === "similar_check") {
     s.similarIds = undefined;
-    await showCrashPrompt(ctx, s);
+    await showUrgencyPrompt(ctx, s);
+    return;
+  }
+
+  if (data.startsWith("urgency_") && s.step === "urgency") {
+    const urgency = data.slice("urgency_".length);
+    s.urgency = urgency;
+    // SUGGESTION skips crash report
+    if (s.category === "SUGGESTION") {
+      await submitTicket(ctx, s, s.title, s.description!, s.category!, undefined);
+    } else {
+      await showCrashPrompt(ctx, s);
+    }
     return;
   }
 }
@@ -629,8 +668,9 @@ async function submitTicket(ctx: Context, s: Session, title: string | undefined,
   const from = ctx.from!;
   const reportedBy = from.username ? "@" + from.username : from.first_name;
   const telegramId = String(from.id);
+  const urgency = (s.urgency ?? "NORMAL") as any;
   const ticket = await db.ticket.create({
-    data: { title, description, crashReport, reportedBy, category: category as any, telegramId },
+    data: { title, description, crashReport, reportedBy, category: category as any, telegramId, urgency },
   });
 
   const tag = await assignBotTag(ticket.id, category).catch(() => null);

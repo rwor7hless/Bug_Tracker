@@ -27,27 +27,23 @@ async function adminSend(ctx: Context, session: AdminSession, text: string, extr
   const c = ctx as any;
 
   const cbMsg = c.callbackQuery?.message;
-  if (cbMsg) {
+  const targetChatId: number | undefined = cbMsg?.chat?.id ?? session.chatId;
+  const targetMsgId: number | undefined = cbMsg?.message_id ?? session.menuMsgId;
+
+  if (targetChatId && targetMsgId) {
     try {
-      await ctx.telegram.editMessageText(cbMsg.chat.id, cbMsg.message_id, undefined, text, extra);
-      session.menuMsgId = cbMsg.message_id;
-      session.chatId = cbMsg.chat.id;
+      await ctx.telegram.editMessageText(targetChatId, targetMsgId, undefined, text, extra);
+      session.menuMsgId = targetMsgId;
+      session.chatId = targetChatId;
       return;
     } catch (e: any) {
       if (e?.description?.includes("message is not modified")) return;
+      await tryDelete(ctx, targetChatId, targetMsgId);
+      session.menuMsgId = undefined;
     }
   }
 
-  if (session.menuMsgId && session.chatId) {
-    try {
-      await ctx.telegram.editMessageText(session.chatId, session.menuMsgId, undefined, text, extra);
-      return;
-    } catch (e: any) {
-      if (e?.description?.includes("message is not modified")) return;
-    }
-  }
-
-  const chatId = session.chatId ?? c.message?.chat?.id ?? c.chat?.id;
+  const chatId = targetChatId ?? c.message?.chat?.id ?? c.chat?.id;
   if (chatId) {
     const msg = await ctx.telegram.sendMessage(chatId, text, extra);
     session.menuMsgId = msg.message_id;
@@ -60,15 +56,11 @@ async function tryDelete(ctx: Context, chatId: number, messageId: number) {
 }
 
 async function showAdminMenu(ctx: Context, session: AdminSession) {
-  return adminSend(ctx, session, "Меню администратора:", {
+  return adminSend(ctx, session, "🛠 <b>Режим администратора</b>", {
+    parse_mode: "HTML",
     reply_markup: {
       inline_keyboard: [
-        [
-          { text: "Закрыть тикет",      callback_data: "admin_resolve" },
-          { text: "Переоткрыть тикет",  callback_data: "admin_reopen" },
-        ],
-        [{ text: "Дайджест", callback_data: "admin_digest" }],
-        [{ text: "Выйти",    callback_data: "admin_out" }],
+        [{ text: "📊 Дайджест", callback_data: "admin_digest" }, { text: "← Выйти", callback_data: "admin_out" }],
       ],
     },
   });
