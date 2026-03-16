@@ -418,7 +418,7 @@ export async function ticketRoutes(app: FastifyInstance) {
 
       const ticket = await db.ticket.findUnique({
         where: { id: req.params.id },
-        select: { id: true, tag: true, title: true, description: true, telegramId: true },
+        select: { id: true, tag: true, title: true, description: true, telegramId: true, reportedBy: true },
       });
       if (!ticket) return reply.code(404).send({ error: "Not found" });
 
@@ -427,17 +427,27 @@ export async function ticketRoutes(app: FastifyInstance) {
         include: { user: { select: { username: true, role: true } } },
       });
 
-      // Notify ticket reporter via Telegram when a web panel user posts a comment
-      if (ticket.telegramId) {
-        const { getBot } = await import("../../bot/botInstance.js");
-        const bot = getBot();
-        const ticketRef = ticket.tag ?? ticket.id.slice(0, 8);
-        const ticketTitle = ticket.title || ticket.description.slice(0, 60);
-        bot?.telegram.sendMessage(
-          ticket.telegramId,
-          `💬 Новый комментарий к вашему тикету <code>${ticketRef}</code>\n<b>${ticketTitle}</b>\n\n${body.trim()}`,
-          { parse_mode: "HTML" }
-        ).catch(() => {});
+      // Notify ticket reporter via Telegram when admin posts a comment
+      if (jwtUser.role === "ADMIN") {
+        let recipientTelegramId: string | null = (ticket as any).telegramId ?? null;
+        if (!recipientTelegramId) {
+          const reporter = await (db.user.findUnique as any)({
+            where: { username: (ticket as any).reportedBy },
+            select: { telegramId: true },
+          });
+          recipientTelegramId = reporter?.telegramId ?? null;
+        }
+        if (recipientTelegramId) {
+          const { getBot } = await import("../../bot/botInstance.js");
+          const bot = getBot();
+          const ticketRef = (ticket as any).tag ?? ticket.id.slice(0, 8);
+          const ticketTitle = ticket.title || ticket.description.slice(0, 60);
+          bot?.telegram.sendMessage(
+            recipientTelegramId,
+            `💬 Комментарий разработчика к тикету <code>${ticketRef}</code>\n<b>${ticketTitle}</b>\n\n${body.trim()}`,
+            { parse_mode: "HTML" }
+          ).catch(() => {});
+        }
       }
 
       return comment;

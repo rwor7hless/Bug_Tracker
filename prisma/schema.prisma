@@ -67,6 +67,7 @@ model User {
   username     String   @unique
   passwordHash String
   role         Role     @default(MODERATOR)
+  telegramId   String?
   createdAt    DateTime @default(now())
   comments     TicketComment[]
 }
