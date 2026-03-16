@@ -427,8 +427,8 @@ export async function ticketRoutes(app: FastifyInstance) {
         include: { user: { select: { username: true, role: true } } },
       });
 
-      // Notify ticket reporter via Telegram when admin posts a comment
-      if (jwtUser.role === "ADMIN" && ticket.telegramId) {
+      // Notify ticket reporter via Telegram when a web panel user posts a comment
+      if (ticket.telegramId) {
         const { getBot } = await import("../../bot/botInstance.js");
         const bot = getBot();
         const ticketRef = ticket.tag ?? ticket.id.slice(0, 8);
