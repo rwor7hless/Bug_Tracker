@@ -108,6 +108,29 @@ button:disabled { opacity: 0.35; cursor: default; filter: none; transform: none;
 }
 .chip-scroll::-webkit-scrollbar { display: none; }
 
+/* ─── Main tabs ─── */
+.main-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 2px solid var(--border);
+}
+.main-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  padding: 8px 18px;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: 6px 6px 0 0;
+  transition: color 0.15s, border-color 0.15s;
+}
+.main-tab:hover { color: var(--text); background: var(--surface2); }
+.main-tab.active { color: var(--accent); border-bottom-color: var(--accent); background: none; font-weight: 700; }
+
 /* ─── Sort toggle ─── */
 .sort-toggle {
   display: flex;

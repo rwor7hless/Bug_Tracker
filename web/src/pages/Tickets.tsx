@@ -113,6 +113,7 @@ export default function Tickets() {
   const isAdmin = user?.role === "ADMIN";
 
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [tab, setTab] = useState<"bugs" | "suggestions">("bugs");
   const [status, setStatus] = useState<string>("OPEN");
   const [sort, setSort] = useState("bumps");
   const [category, setCategory] = useState("");
@@ -153,20 +154,25 @@ export default function Tickets() {
     const params = new URLSearchParams({ sort: apiSort });
     if (status) params.set("status", status);
     if (search.trim()) params.set("search", search.trim());
-    if (category) params.set("category", category);
+    if (tab === "suggestions") {
+      params.set("category", "SUGGESTION");
+    } else {
+      if (category) params.set("category", category);
+    }
     const r = await fetch(`/api/tickets?${params}`);
     if (r.ok) {
       const data: Ticket[] = await r.json();
+      const filtered = tab === "bugs" ? data.filter(t => t.category !== "SUGGESTION") : data;
       if (sort === "urgency") {
-        data.sort((a, b) => (URGENCY_ORDER[a.urgency] ?? 2) - (URGENCY_ORDER[b.urgency] ?? 2));
+        filtered.sort((a, b) => (URGENCY_ORDER[a.urgency] ?? 2) - (URGENCY_ORDER[b.urgency] ?? 2));
       }
-      setTickets(data);
+      setTickets(filtered);
     }
     setLoading(false);
   }
 
-  useEffect(() => { setPage(1); }, [status, sort, search, category]);
-  useEffect(() => { load(); }, [status, sort, search, category]);
+  useEffect(() => { setPage(1); }, [tab, status, sort, search, category]);
+  useEffect(() => { load(); }, [tab, status, sort, search, category]);
 
   // Debounced similar-hint check — triggers after title input
   useEffect(() => {
@@ -293,6 +299,24 @@ export default function Tickets() {
   // Shared form for create / edit modal
   return (
     <div>
+      {/* ── Tabs ── */}
+      <div className="main-tabs">
+        <button
+          type="button"
+          className={"main-tab" + (tab === "bugs" ? " active" : "")}
+          onClick={() => { setTab("bugs"); setCategory(""); setPage(1); }}
+        >
+          🐛 Баги
+        </button>
+        <button
+          type="button"
+          className={"main-tab" + (tab === "suggestions" ? " active" : "")}
+          onClick={() => { setTab("suggestions"); setCategory(""); setPage(1); }}
+        >
+          💡 Предложения
+        </button>
+      </div>
+
       {/* ── Filter bar ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16 }}>
         {/* Row 1: search + create */}
@@ -305,7 +329,7 @@ export default function Tickets() {
               onChange={e => setSearch(e.target.value)}
             />
           </div>
-          <button className="btn-primary" onClick={() => setShowCreate(true)} style={{ flexShrink: 0, padding: "9px 16px" }}>
+          <button className="btn-primary" onClick={() => { setNewCategory(tab === "suggestions" ? "SUGGESTION" : "OTHER"); setShowCreate(true); }} style={{ flexShrink: 0, padding: "9px 16px" }}>
             + Новый
           </button>
         </div>
@@ -320,14 +344,16 @@ export default function Tickets() {
               </button>
             ))}
           </div>
-          <select
-            value={category}
-            onChange={e => { setCategory(e.target.value); setPage(1); }}
-            style={{ width: "auto", minWidth: 0, padding: "6px 28px 6px 10px", fontSize: 13, flexShrink: 0 }}
-          >
-            <option value="">Все категории</option>
-            {CATEGORIES.map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
-          </select>
+          {tab === "bugs" && (
+            <select
+              value={category}
+              onChange={e => { setCategory(e.target.value); setPage(1); }}
+              style={{ width: "auto", minWidth: 0, padding: "6px 28px 6px 10px", fontSize: 13, flexShrink: 0 }}
+            >
+              <option value="">Все категории</option>
+              {CATEGORIES.filter(c => c.value !== "SUGGESTION").map(c => <option key={c.value} value={c.value}>{c.label}</option>)}
+            </select>
+          )}
           <div className="sort-toggle" style={{ flexShrink: 0 }}>
             <button type="button" className={sort === "bumps" ? "active" : ""} onClick={() => setSort("bumps")}>↑ Bumps</button>
             <button type="button" className={sort === "date" ? "active" : ""} onClick={() => setSort("date")}>Дата</button>
