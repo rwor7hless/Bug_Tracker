@@ -207,8 +207,15 @@ export async function ticketRoutes(app: FastifyInstance) {
       if (!title) return reply.code(400).send({ error: "title required" });
 
       const cat = (category as any) || "OTHER";
+
+      // Try to find Telegram ID for web panel user (name may have @ prefix)
+      const mod = await db.moderator.findFirst({
+        where: { OR: [{ name: reportedBy }, { name: `@${reportedBy}` }] },
+        select: { telegramId: true },
+      });
+
       const ticket = await db.ticket.create({
-        data: { title, description: description ?? "", crashReport, reportedBy, category: cat },
+        data: { title, description: description ?? "", crashReport, reportedBy, category: cat, telegramId: mod?.telegramId },
         include: PHOTO_INCLUDE,
       });
 
@@ -431,11 +438,12 @@ export async function ticketRoutes(app: FastifyInstance) {
       if (jwtUser.role === "ADMIN") {
         let recipientTelegramId: string | null = (ticket as any).telegramId ?? null;
         if (!recipientTelegramId) {
-          const reporter = await (db.user.findUnique as any)({
-            where: { username: (ticket as any).reportedBy },
+          const reportedBy = (ticket as any).reportedBy as string;
+          const mod = await db.moderator.findFirst({
+            where: { OR: [{ name: reportedBy }, { name: `@${reportedBy}` }] },
             select: { telegramId: true },
           });
-          recipientTelegramId = reporter?.telegramId ?? null;
+          recipientTelegramId = mod?.telegramId ?? null;
         }
         if (recipientTelegramId) {
           const { getBot } = await import("../../bot/botInstance.js");
