@@ -221,9 +221,8 @@ select {
 .card-footer {
   padding: 10px 16px;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 8px;
   border-top: 1px solid var(--border);
 }
 
@@ -270,6 +269,20 @@ select {
 @keyframes modal-slide-in {
   from { opacity: 0; transform: translateY(16px) scale(0.97); }
   to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes modal-overlay-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+@keyframes modal-slide-out {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to   { opacity: 0; transform: translateY(16px) scale(0.97); }
+}
+.modal-overlay.closing {
+  animation: modal-overlay-out 0.2s ease-in forwards;
+}
+.modal-overlay.closing .modal {
+  animation: modal-slide-out 0.2s ease-in forwards;
 }
 .modal-overlay {
   position: fixed;
@@ -425,6 +438,10 @@ select {
     from { opacity: 0; transform: translateY(100%); }
     to   { opacity: 1; transform: translateY(0); }
   }
+  @keyframes modal-slide-down {
+    from { opacity: 1; transform: translateY(0); }
+    to   { opacity: 0; transform: translateY(100%); }
+  }
   .modal-overlay {
     align-items: flex-end;
     padding: 0;
@@ -435,6 +452,10 @@ select {
     max-height: 92vh;
     padding: 20px 16px 36px;
     animation: modal-slide-up 0.3s ease-out;
+  }
+  .modal-overlay.closing .modal,
+  .modal-overlay.closing .modal-wide {
+    animation: modal-slide-down 0.25s ease-in forwards;
   }
 
   /* Main content */

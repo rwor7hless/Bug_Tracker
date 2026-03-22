@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import TicketCard from "../components/TicketCard";
 import { useAuth } from "../components/AuthContext";
 
@@ -147,6 +147,22 @@ export default function Tickets() {
   const [editUrgency, setEditUrgency] = useState("NORMAL");
   const [saving, setSaving] = useState(false);
 
+  // Modal close animation
+  const createOverlayRef = useRef<HTMLDivElement>(null);
+  const editOverlayRef = useRef<HTMLDivElement>(null);
+  const [closingCreate, setClosingCreate] = useState(false);
+  const [closingEdit, setClosingEdit] = useState(false);
+
+  const animateClose = useCallback((ref: React.RefObject<HTMLDivElement | null>, setClosing: (v: boolean) => void, onDone: () => void) => {
+    setClosing(true);
+    const el = ref.current;
+    if (el) {
+      el.addEventListener("animationend", () => { setClosing(false); onDone(); }, { once: true });
+    } else {
+      setClosing(false); onDone();
+    }
+  }, []);
+
   const URGENCY_ORDER: Record<string, number> = { CRITICAL: 0, HIGH: 1, NORMAL: 2 };
 
   async function load() {
@@ -188,13 +204,21 @@ export default function Tickets() {
     return () => { clearTimeout(timer); setSimilarHintLoading(false); };
   }, [newTitle, newCategory, showCreate]);
 
-  function closeCreate() {
+  function closeCreateImmediate() {
     setShowCreate(false);
     setNewPhotos([]);
     setSimilarHint([]);
     setSimilarHintLoading(false);
     setNewTitle(""); setNewDescription(""); setNewCrash("");
     setNewCategory("OTHER"); setNewUrgency("NORMAL");
+  }
+
+  function closeCreate() {
+    animateClose(createOverlayRef, setClosingCreate, closeCreateImmediate);
+  }
+
+  function closeEdit() {
+    animateClose(editOverlayRef, setClosingEdit, () => setEditTicket(null));
   }
 
   async function bumpFromHint(id: string) {
@@ -409,7 +433,7 @@ export default function Tickets() {
 
       {/* ── Create modal ── */}
       {showCreate && (
-        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) closeCreate(); }}>
+        <div ref={createOverlayRef} className={`modal-overlay${closingCreate ? " closing" : ""}`} onClick={e => { if (e.target === e.currentTarget) closeCreate(); }}>
           <div className="modal">
             <div className="modal-header">
               <span className="modal-title">Новый тикет</span>
@@ -493,11 +517,11 @@ export default function Tickets() {
 
       {/* ── Edit modal ── */}
       {editTicket && (
-        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setEditTicket(null); }}>
+        <div ref={editOverlayRef} className={`modal-overlay${closingEdit ? " closing" : ""}`} onClick={e => { if (e.target === e.currentTarget) closeEdit(); }}>
           <div className="modal">
             <div className="modal-header">
               <span className="modal-title">Редактировать</span>
-              <button className="btn-ghost" onClick={() => setEditTicket(null)} style={{ padding: "4px 10px", minHeight: 30 }}>✕</button>
+              <button className="btn-ghost" onClick={closeEdit} style={{ padding: "4px 10px", minHeight: 30 }}>✕</button>
             </div>
 
             <TicketForm
@@ -510,7 +534,7 @@ export default function Tickets() {
             />
 
             <div className="modal-footer">
-              <button className="btn-ghost" onClick={() => setEditTicket(null)}>Отмена</button>
+              <button className="btn-ghost" onClick={closeEdit}>Отмена</button>
               <button className="btn-primary" onClick={saveEdit} disabled={saving || !editDescription.trim()} style={{ padding: "8px 22px" }}>
                 {saving ? "Сохраняем…" : "Сохранить"}
               </button>

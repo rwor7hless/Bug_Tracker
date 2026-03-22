@@ -190,7 +190,7 @@ async function showTicketList(ctx: Context, s: Session, tickets: any[], page: nu
   }
   nav.push([
     { text: "🔍 Поиск", callback_data: "menu_search" },
-    { text: "↑ Bump", callback_data: "menu_bump" },
+    { text: "Bump", callback_data: "menu_bump" },
   ]);
   nav.push([{ text: "В меню", callback_data: "menu_back" }]);
 

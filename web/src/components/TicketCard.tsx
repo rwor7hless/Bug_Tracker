@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface TicketPhoto { id: string; filename: string; order: number; }
 
@@ -116,6 +116,19 @@ function PhotoCarousel({ photos, isAdmin, onDelete }: { photos: TicketPhoto[]; i
 
 export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, onInProgress, onPatchPending, onResolve, onReopen, onDuplicate, onDelete, onPhotoDelete, onEdit }: Props) {
   const [showDetail, setShowDetail] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const overlayRef = useRef<HTMLDivElement>(null);
+
+  const closeDetail = useCallback(() => {
+    setClosing(true);
+    const el = overlayRef.current;
+    if (el) {
+      el.addEventListener("animationend", () => { setClosing(false); setShowDetail(false); }, { once: true });
+    } else {
+      setClosing(false); setShowDetail(false);
+    }
+  }, []);
+
   const [showCrash, setShowCrash] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
   const [dupId, setDupId] = useState("");
@@ -173,14 +186,41 @@ export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, o
 
         {/* ── Clickable body ── */}
         <div className="card-body" onClick={() => setShowDetail(true)}>
-          {/* Photo thumbnails */}
+          {/* Row 1: status left, category+urgency right */}
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 8 }}>
+            <span className={`badge ${statusClass}`}>{statusText}</span>
+            <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 3, flexShrink: 0 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-2)" }}>
+                {categoryIcon[ticket.category]} {categoryLabel[ticket.category] ?? ticket.category}
+              </span>
+              {urgency && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: urgency.color, background: `${urgency.color}18`, padding: "2px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>
+                  {urgency.icon} {urgency.label}
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Row 2: title */}
+          <p style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", lineHeight: 1.45, marginBottom: 4 }}>
+            {displayTitle}
+          </p>
+
+          {/* Row 3: description */}
+          {ticket.title && (
+            <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5, marginBottom: 4 }}>
+              {ticket.description.length > 100 ? ticket.description.slice(0, 100) + "…" : ticket.description}
+            </p>
+          )}
+
+          {/* Row 4: photo thumbnails */}
           {photos.length > 0 && (
-            <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
               {photos.slice(0, 3).map((p, i) => (
                 <div key={p.id} style={{ position: "relative" }}>
-                  <img src={`/uploads/${p.filename}`} alt="" style={{ width: 64, height: 44, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }} />
+                  <img src={`/uploads/${p.filename}`} alt="" style={{ width: 56, height: 40, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }} />
                   {i === 2 && photos.length > 3 && (
-                    <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 12, fontWeight: 700 }}>
+                    <div style={{ position: "absolute", inset: 0, background: "rgba(0,0,0,0.6)", borderRadius: 6, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontSize: 11, fontWeight: 700 }}>
                       +{photos.length - 3}
                     </div>
                   )}
@@ -189,70 +229,43 @@ export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, o
             </div>
           )}
 
-          {/* Title row */}
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 10 }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginBottom: 4 }}>
-                {urgency && (
-                  <span style={{ fontSize: 11, fontWeight: 700, color: urgency.color, background: `${urgency.color}18`, padding: "2px 7px", borderRadius: 10, whiteSpace: "nowrap" }}>
-                    {urgency.icon} {urgency.label}
-                  </span>
-                )}
-              </div>
-              <p style={{ fontSize: 14, fontWeight: 600, color: "var(--text)", lineHeight: 1.45, marginBottom: ticket.title ? 5 : 0 }}>
-                {displayTitle}
-              </p>
-              {ticket.title && (
-                <p style={{ fontSize: 13, color: "var(--text-2)", lineHeight: 1.5 }}>
-                  {ticket.description.length > 120 ? ticket.description.slice(0, 120) + "…" : ticket.description}
-                </p>
-              )}
-              {ticket.resolveComment && (
-                <p style={{ fontSize: 12, color: "var(--text-2)", marginTop: 6, padding: "6px 10px", background: "var(--surface2)", borderRadius: "var(--radius)", borderLeft: "3px solid var(--accent)" }}>
-                  <span style={{ color: "var(--text-3)" }}>Решение: </span>{ticket.resolveComment}
-                </p>
-              )}
-            </div>
-
-            {/* Status + category */}
-            <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4, flexShrink: 0 }}>
-              <span className={`badge ${statusClass}`}>{statusText}</span>
-              <span style={{ fontSize: 11, color: "var(--text-3)" }}>
-                {categoryIcon[ticket.category]} {categoryLabel[ticket.category] ?? ticket.category}
-              </span>
-            </div>
-          </div>
-
-          {/* Meta row */}
-          <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 10, fontSize: 12, color: "var(--text-3)" }}>
-            <CopyTag tag={ticket.tag ?? "#" + ticket.id.slice(0, 8)} />
-            <span>·</span>
-            <span>{ticket.reportedBy}</span>
-            <span>·</span>
-            <span>{date}</span>
-            {photos.length > 0 && <><span>·</span><span>📷 {photos.length}</span></>}
-            {photos.length === 0 && ticket.photosDeleted && <><span>·</span><span style={{ color: "var(--text-3)", fontStyle: "italic" }}>📷 удалены</span></>}
-            <span style={{ marginLeft: "auto", background: "var(--accent-dim)", borderRadius: 6, padding: "3px 10px", color: "var(--accent)", fontWeight: 700, fontSize: 12, border: "1px solid rgba(224,154,58,0.2)" }}>
-              🔥 {ticket.bumpCount}
-            </span>
-          </div>
+          {/* Row 5: resolve comment */}
+          {ticket.resolveComment && (
+            <p style={{ fontSize: 12, color: "var(--text-2)", marginTop: 8, padding: "6px 10px", background: "var(--surface2)", borderRadius: "var(--radius)", borderLeft: "3px solid var(--accent)" }}>
+              <span style={{ color: "var(--text-3)" }}>Решение: </span>{ticket.resolveComment}
+            </p>
+          )}
         </div>
 
         {/* ── Action footer ── */}
         <div className="card-footer">
-          <button className="btn-ghost" style={{ fontSize: 12, minHeight: 32, padding: "5px 12px" }} onClick={() => setShowDetail(true)}>
-            Открыть
-          </button>
-          {canEdit && (
-            <button className="btn-ghost" style={{ fontSize: 12, minHeight: 32, padding: "5px 12px" }} onClick={() => onEdit?.(ticket)}>
-              ✏ Изменить
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "var(--text-3)", width: "100%" }}>
+            <CopyTag tag={ticket.tag ?? "#" + ticket.id.slice(0, 8)} />
+            <span>·</span>
+            <span style={{ whiteSpace: "nowrap" }}>{ticket.reportedBy}</span>
+            <span>·</span>
+            <span style={{ whiteSpace: "nowrap" }}>{date}</span>
+            {photos.length > 0 && <><span>·</span><span>📷 {photos.length}</span></>}
+            {photos.length === 0 && ticket.photosDeleted && <><span>·</span><span style={{ fontStyle: "italic" }}>📷 удалены</span></>}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, width: "100%" }}>
+            <button className="btn-ghost" style={{ fontSize: 12, minHeight: 32, padding: "5px 12px" }} onClick={() => setShowDetail(true)}>
+              Открыть
             </button>
-          )}
-          {isActive && (
-            <button className="btn-ghost" style={{ fontSize: 12, minHeight: 32, padding: "5px 12px" }} onClick={() => onBump(ticket.id)}>
-              ↑ Bump
-            </button>
-          )}
+            {canEdit && (
+              <button className="btn-ghost" style={{ fontSize: 12, minHeight: 32, padding: "5px 12px" }} onClick={() => onEdit?.(ticket)}>
+                Изменить
+              </button>
+            )}
+            {isActive && (
+              <button className="btn-ghost" style={{ fontSize: 12, minHeight: 32, padding: "5px 12px" }} onClick={() => onBump(ticket.id)}>
+                Bump
+              </button>
+            )}
+            <span style={{ marginLeft: "auto", background: "var(--accent-dim)", borderRadius: 6, padding: "3px 10px", color: "var(--accent)", fontWeight: 700, fontSize: 12, border: "1px solid rgba(224,154,58,0.2)", whiteSpace: "nowrap" }}>
+              🔥 {ticket.bumpCount}
+            </span>
+          </div>
         </div>
 
         {/* ── Admin bar ── */}
@@ -309,7 +322,7 @@ export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, o
 
       {/* ── Detail modal ── */}
       {showDetail && (
-        <div className="modal-overlay" onClick={e => { if (e.target === e.currentTarget) setShowDetail(false); }}>
+        <div ref={overlayRef} className={`modal-overlay${closing ? " closing" : ""}`} onClick={e => { if (e.target === e.currentTarget) closeDetail(); }}>
           <div className="modal modal-wide">
             <div className="modal-header">
               <div style={{ flex: 1, minWidth: 0 }}>
@@ -322,7 +335,7 @@ export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, o
                 <h2 style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", lineHeight: 1.4 }}>{ticket.title || "Тикет #" + ticket.id.slice(0, 8)}</h2>
                 <p style={{ fontSize: 12, color: "var(--text-3)", marginTop: 3 }}>{ticket.reportedBy} · {date} · ↑ {ticket.bumpCount}</p>
               </div>
-              <button className="btn-ghost" onClick={() => setShowDetail(false)} style={{ padding: "4px 10px", minHeight: 30, marginLeft: 12, alignSelf: "flex-start" }}>✕</button>
+              <button className="btn-ghost" onClick={closeDetail} style={{ padding: "4px 10px", minHeight: 30, marginLeft: 12, alignSelf: "flex-start" }}>✕</button>
             </div>
 
             {/* Description */}
