@@ -9,8 +9,9 @@ interface Stats {
 
 const STATUS_META: { key: string; label: string; color: string }[] = [
   { key: "OPEN",        label: "Открыто",   color: "#f59e0b" },
-  { key: "IN_PROGRESS", label: "В работе",  color: "#3b82f6" },
-  { key: "DUPLICATE",   label: "Дубликаты", color: "#8b5cf6" },
+  { key: "IN_PROGRESS",   label: "В работе",  color: "#3b82f6" },
+  { key: "PATCH_PENDING", label: "В патче",   color: "#a78bfa" },
+  { key: "DUPLICATE",     label: "Дубликаты", color: "#8b5cf6" },
   { key: "RESOLVED",    label: "Решено",    color: "#22c55e" },
 ];
 

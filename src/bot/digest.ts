@@ -15,7 +15,7 @@ export async function sendDailyDigest(bot: Telegraf, chatId: string) {
   ]);
 
   const topBumped = await db.ticket.findMany({
-    where: { status: { in: ["OPEN", "IN_PROGRESS"] as any[] } },
+    where: { status: { in: ["OPEN", "IN_PROGRESS", "PATCH_PENDING"] as any[] } },
     orderBy: { bumpCount: "desc" },
     take: 5,
   });
@@ -25,7 +25,7 @@ export async function sendDailyDigest(bot: Telegraf, chatId: string) {
 
   let msg = "<b>Дайджест</b> · " + new Date().toLocaleDateString("ru-RU") + "\n\n";
 
-  msg += `Открыто: ${statusMap["OPEN"] ?? 0}  В работе: ${statusMap["IN_PROGRESS"] ?? 0}  Решено: ${statusMap["RESOLVED"] ?? 0}  Дубл.: ${statusMap["DUPLICATE"] ?? 0}\n\n`;
+  msg += `Открыто: ${statusMap["OPEN"] ?? 0}  В работе: ${statusMap["IN_PROGRESS"] ?? 0}  В патче: ${statusMap["PATCH_PENDING"] ?? 0}  Решено: ${statusMap["RESOLVED"] ?? 0}  Дубл.: ${statusMap["DUPLICATE"] ?? 0}\n\n`;
 
   if (newTickets.length) {
     msg += `<b>Новые за 24ч (${newTickets.length}):</b>\n`;
@@ -41,7 +41,7 @@ export async function sendDailyDigest(bot: Telegraf, chatId: string) {
   if (topBumped.length) {
     msg += "<b>Топ по bumps:</b>\n";
     for (const t of topBumped) {
-      const mark = (t.status as string) === "IN_PROGRESS" ? " [в работе]" : "";
+      const mark = (t.status as string) === "IN_PROGRESS" ? " [в работе]" : (t.status as string) === "PATCH_PENDING" ? " [в патче]" : "";
       msg += `  <code>${t.id.slice(0, 8)}</code>${mark} bumps:${t.bumpCount} — ${t.description.slice(0, 50)}\n`;
     }
   }

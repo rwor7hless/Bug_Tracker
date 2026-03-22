@@ -12,7 +12,7 @@ export function getUploadDir(): string {
   return path.join(__dirname, "..", "..", "..", "..", "uploads");
 }
 
-const VALID_STATUSES = ["OPEN", "IN_PROGRESS", "DUPLICATE", "RESOLVED"];
+const VALID_STATUSES = ["OPEN", "IN_PROGRESS", "PATCH_PENDING", "DUPLICATE", "RESOLVED"];
 const VALID_CATEGORIES = ["CRASH", "LAG", "VISUAL", "GAMEPLAY", "OTHER", "SUGGESTION"];
 const VALID_URGENCIES = ["NORMAL", "HIGH", "CRITICAL"];
 
@@ -308,6 +308,11 @@ export async function ticketRoutes(app: FastifyInstance) {
         (comment ? `\n\n<b>Комментарий:</b> ${comment}` : "") +
         `\n\nСпасибо за репорт.`;
       await notifyModerators(id, resolveMsg);
+    } else if (data.status === "PATCH_PENDING") {
+      const patchMsg =
+        `Тикет <code>${(ticket as any).tag ?? id.slice(0, 8)}</code> должен быть исправлен в патче.\n\n` +
+        `<b>${ticketTitle}</b>`;
+      await notifyModerators(id, patchMsg);
     } else if (data.status === "IN_PROGRESS") {
       const inProgressMsg =
         `Тикет <code>${(ticket as any).tag ?? id.slice(0, 8)}</code> взят в работу.\n\n` +

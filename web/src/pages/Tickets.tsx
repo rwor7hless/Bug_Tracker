@@ -11,7 +11,7 @@ interface Ticket {
   description: string;
   crashReport?: string | null;
   resolveComment?: string | null;
-  status: "OPEN" | "IN_PROGRESS" | "DUPLICATE" | "RESOLVED";
+  status: "OPEN" | "IN_PROGRESS" | "PATCH_PENDING" | "DUPLICATE" | "RESOLVED";
   category: string;
   urgency: "NORMAL" | "HIGH" | "CRITICAL";
   duplicateOf?: string | null;
@@ -32,13 +32,14 @@ const CATEGORIES = [
 ];
 
 const STATUS_FILTERS = [
-  { value: "OPEN",        label: "Открытые" },
-  { value: "IN_PROGRESS", label: "В работе" },
-  { value: "DUPLICATE",   label: "Дубликаты" },
-  { value: "RESOLVED",    label: "Решённые" },
+  { value: "OPEN",          label: "Открытые" },
+  { value: "IN_PROGRESS",   label: "В работе" },
+  { value: "PATCH_PENDING", label: "В патче" },
+  { value: "DUPLICATE",     label: "Дубликаты" },
+  { value: "RESOLVED",      label: "Решённые" },
 ];
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 20;
 
 function UrgencyPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   return (
@@ -271,6 +272,10 @@ export default function Tickets() {
     await fetch(`/api/tickets/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "IN_PROGRESS" }) });
     load();
   }
+  async function patchPending(id: string) {
+    await fetch(`/api/tickets/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "PATCH_PENDING" }) });
+    load();
+  }
   async function resolve(id: string, resolveComment?: string) {
     await fetch(`/api/tickets/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ status: "RESOLVED", ...(resolveComment ? { resolveComment } : {}) }) });
     load();
@@ -337,7 +342,6 @@ export default function Tickets() {
         {/* Row 2: status chips + category select + sort */}
         <div className="filter-row2" style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <div className="chip-scroll" style={{ flex: 1 }}>
-            <button type="button" className={"tag-btn" + (!status ? " active" : "")} onClick={() => setStatus("")}>Все</button>
             {STATUS_FILTERS.map(s => (
               <button key={s.value} type="button" className={"tag-btn" + (status === s.value ? " active" : "")} onClick={() => setStatus(s.value)}>
                 {s.label}
@@ -374,7 +378,7 @@ export default function Tickets() {
       {loading && <p style={{ color: "var(--text-3)", fontSize: 13, marginBottom: 12 }}>Загрузка…</p>}
 
       {/* ── List ── */}
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      <div className="ticket-grid">
         {pageTickets.map(t => (
           <TicketCard
             key={t.id}
@@ -383,6 +387,7 @@ export default function Tickets() {
             currentUsername={user?.username}
             onBump={bump}
             onInProgress={inProgress}
+            onPatchPending={patchPending}
             onResolve={resolve}
             onReopen={reopen}
             onDuplicate={duplicate}

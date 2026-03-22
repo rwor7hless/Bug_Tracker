@@ -43,6 +43,7 @@ model TicketPhoto {
 enum Status {
   OPEN
   IN_PROGRESS
+  PATCH_PENDING
   DUPLICATE
   RESOLVED
 }

@@ -5,7 +5,7 @@ interface TicketPhoto { id: string; filename: string; order: number; }
 interface Ticket {
   id: string; tag?: string | null; title?: string | null; description: string;
   crashReport?: string | null; resolveComment?: string | null;
-  status: "OPEN" | "IN_PROGRESS" | "DUPLICATE" | "RESOLVED";
+  status: "OPEN" | "IN_PROGRESS" | "PATCH_PENDING" | "DUPLICATE" | "RESOLVED";
   category: string; urgency: "NORMAL" | "HIGH" | "CRITICAL";
   photosDeleted?: boolean;
   duplicateOf?: string | null; bumpCount: number;
@@ -21,6 +21,7 @@ interface Props {
   ticket: Ticket; isAdmin: boolean; currentUsername?: string;
   onBump: (id: string) => void;
   onInProgress: (id: string) => void;
+  onPatchPending: (id: string) => void;
   onResolve: (id: string, comment?: string) => void;
   onReopen: (id: string) => void;
   onDuplicate: (id: string, originalId: string) => void;
@@ -40,10 +41,11 @@ const categoryIcon: Record<string, string> = {
 };
 
 const statusMeta: Record<string, { cls: string; text: string }> = {
-  OPEN:        { cls: "badge-open",     text: "Открыт" },
-  IN_PROGRESS: { cls: "badge-progress", text: "В работе" },
-  DUPLICATE:   { cls: "badge-dup",      text: "Дубликат" },
-  RESOLVED:    { cls: "badge-resolved", text: "Решено" },
+  OPEN:          { cls: "badge-open",     text: "Открыт" },
+  IN_PROGRESS:   { cls: "badge-progress", text: "В работе" },
+  PATCH_PENDING: { cls: "badge-patch",    text: "В патче" },
+  DUPLICATE:     { cls: "badge-dup",      text: "Дубликат" },
+  RESOLVED:      { cls: "badge-resolved", text: "Решено" },
 };
 
 const urgencyMeta: Record<string, { label: string; color: string; icon: string } | null> = {
@@ -112,7 +114,7 @@ function PhotoCarousel({ photos, isAdmin, onDelete }: { photos: TicketPhoto[]; i
   );
 }
 
-export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, onInProgress, onResolve, onReopen, onDuplicate, onDelete, onPhotoDelete, onEdit }: Props) {
+export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, onInProgress, onPatchPending, onResolve, onReopen, onDuplicate, onDelete, onPhotoDelete, onEdit }: Props) {
   const [showDetail, setShowDetail] = useState(false);
   const [showCrash, setShowCrash] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
@@ -162,7 +164,7 @@ export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, o
     URL.revokeObjectURL(url);
   }
 
-  const isActive = ticket.status === "OPEN" || ticket.status === "IN_PROGRESS";
+  const isActive = ticket.status === "OPEN" || ticket.status === "IN_PROGRESS" || ticket.status === "PATCH_PENDING";
   const canEdit = isAdmin || ticket.reportedBy === currentUsername;
 
   return (
@@ -230,8 +232,8 @@ export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, o
             <span>{date}</span>
             {photos.length > 0 && <><span>·</span><span>📷 {photos.length}</span></>}
             {photos.length === 0 && ticket.photosDeleted && <><span>·</span><span style={{ color: "var(--text-3)", fontStyle: "italic" }}>📷 удалены</span></>}
-            <span style={{ marginLeft: "auto", background: "var(--surface2)", borderRadius: 6, padding: "2px 9px", color: "var(--text-2)", fontWeight: 600, fontSize: 12 }}>
-              ↑ {ticket.bumpCount}
+            <span style={{ marginLeft: "auto", background: "var(--accent-dim)", borderRadius: 6, padding: "3px 10px", color: "var(--accent)", fontWeight: 700, fontSize: 12, border: "1px solid rgba(224,154,58,0.2)" }}>
+              🔥 {ticket.bumpCount}
             </span>
           </div>
         </div>
@@ -265,8 +267,15 @@ export default function TicketCard({ ticket, isAdmin, currentUsername, onBump, o
             )}
             {ticket.status === "IN_PROGRESS" && (
               <>
+                <button className="btn-patch" style={{ fontSize: 12, minHeight: 30, padding: "4px 12px" }} onClick={() => onPatchPending(ticket.id)}>📦 В патче</button>
                 <button className="btn-success" style={{ fontSize: 12, minHeight: 30, padding: "4px 12px" }} onClick={() => setResolvingComment(v => !v)}>Решено ✓</button>
                 <button className="btn-ghost" style={{ fontSize: 12, minHeight: 30, padding: "4px 12px" }} onClick={() => onReopen(ticket.id)}>↩ Вернуть</button>
+              </>
+            )}
+            {ticket.status === "PATCH_PENDING" && (
+              <>
+                <button className="btn-success" style={{ fontSize: 12, minHeight: 30, padding: "4px 12px" }} onClick={() => setResolvingComment(v => !v)}>Решено ✓</button>
+                <button className="btn-blue" style={{ fontSize: 12, minHeight: 30, padding: "4px 12px" }} onClick={() => onInProgress(ticket.id)}>↩ В работу</button>
               </>
             )}
             {(ticket.status === "RESOLVED" || ticket.status === "DUPLICATE") && (
