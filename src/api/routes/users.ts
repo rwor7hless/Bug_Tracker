@@ -45,11 +45,12 @@ export async function userRoutes(app: FastifyInstance) {
       if (!password || password.length < 6)
         return reply.code(400).send({ error: "Пароль должен быть не менее 6 символов" });
 
+      const target = await db.user.findUnique({ where: { id: req.params.id } });
+      if (!target) return reply.code(404).send({ error: "User not found" });
+      if (target.role === "ADMIN") return reply.code(403).send({ error: "Нельзя менять пароль администратора" });
+
       const passwordHash = await bcrypt.hash(password, 10);
-      const updated = await db.user
-        .update({ where: { id: req.params.id }, data: { passwordHash } })
-        .catch(() => null);
-      if (!updated) return reply.code(404).send({ error: "User not found" });
+      await db.user.update({ where: { id: req.params.id }, data: { passwordHash } });
 
       return { ok: true };
     }
@@ -83,6 +84,9 @@ export async function userRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const caller = (req as any).user;
+      if (caller?.role === "ADMIN")
+        return reply.code(403).send({ error: "Пароль администратора задаётся через .env" });
+
       const { oldPassword, newPassword } = req.body;
 
       if (!oldPassword || !newPassword)

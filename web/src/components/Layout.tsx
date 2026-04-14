@@ -125,23 +125,29 @@ export default function Layout() {
         </nav>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-          <button
-            className="btn-ghost"
-            onClick={() => setShowPasswordModal(true)}
-            style={{
-              fontSize: 12,
-              padding: "5px 10px",
-              minHeight: 32,
-              maxWidth: 120,
-              overflow: "hidden",
-              textOverflow: "ellipsis",
-              whiteSpace: "nowrap",
-              color: "var(--text-3)",
-            }}
-            title="Сменить пароль"
-          >
-            {user?.username}
-          </button>
+          {isAdmin ? (
+            <span style={{ fontSize: 12, color: "var(--text-3)", maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {user?.username}
+            </span>
+          ) : (
+            <button
+              className="btn-ghost"
+              onClick={() => setShowPasswordModal(true)}
+              style={{
+                fontSize: 12,
+                padding: "5px 10px",
+                minHeight: 32,
+                maxWidth: 120,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                color: "var(--text-3)",
+              }}
+              title="Сменить пароль"
+            >
+              {user?.username}
+            </button>
+          )}
           <button
             className="btn-ghost"
             onClick={handleLogout}

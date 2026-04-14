@@ -248,18 +248,20 @@ export default function Moderators() {
                   {u.role === "ADMIN" ? "Администратор" : "Модератор"}
                 </p>
               </div>
-              <button
-                className="btn-ghost"
-                style={{ fontSize: 12 }}
-                onClick={() => {
-                  setEditingId(editingId === u.id ? null : u.id);
-                  setNewPassword("");
-                  setPwError("");
-                  setPwSuccess("");
-                }}
-              >
-                {editingId === u.id ? "Отмена" : "Сменить пароль"}
-              </button>
+              {u.role !== "ADMIN" && (
+                <button
+                  className="btn-ghost"
+                  style={{ fontSize: 12 }}
+                  onClick={() => {
+                    setEditingId(editingId === u.id ? null : u.id);
+                    setNewPassword("");
+                    setPwError("");
+                    setPwSuccess("");
+                  }}
+                >
+                  {editingId === u.id ? "Отмена" : "Сменить пароль"}
+                </button>
+              )}
             </div>
 
             {editingId === u.id && (
