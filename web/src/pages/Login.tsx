@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../components/AuthContext";
+import PasswordInput from "../components/PasswordInput";
 
 export default function Login() {
   const { login } = useAuth();
@@ -57,13 +58,7 @@ export default function Login() {
 
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <label style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>Пароль</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            required
-          />
+          <PasswordInput value={password} onChange={setPassword} placeholder="••••••••" required />
         </div>
 
         {error && (
