@@ -61,8 +61,12 @@ async function notifyModerators(ticketId: string, message: string, excludeTelegr
   const { getBot } = await import("../../bot/botInstance.js");
   const bot = getBot();
   if (!bot) return;
-  const moderators = await db.moderator.findMany({ select: { telegramId: true } });
+  const moderators = await db.user.findMany({
+    where: { telegramId: { not: null } },
+    select: { telegramId: true },
+  });
   for (const mod of moderators) {
+    if (!mod.telegramId) continue;
     if (excludeTelegramId && mod.telegramId === excludeTelegramId) continue;
     bot.telegram.sendMessage(mod.telegramId, message, { parse_mode: "HTML" }).catch(() => {});
   }
@@ -208,9 +212,9 @@ export async function ticketRoutes(app: FastifyInstance) {
 
       const cat = (category as any) || "OTHER";
 
-      // Try to find Telegram ID for web panel user (name may have @ prefix)
-      const mod = await db.moderator.findFirst({
-        where: { OR: [{ name: reportedBy }, { name: `@${reportedBy}` }] },
+      // Try to find Telegram ID for web panel user
+      const mod = await db.user.findFirst({
+        where: { OR: [{ username: reportedBy }, { username: reportedBy.replace(/^@/, "") }] },
         select: { telegramId: true },
       });
 
@@ -444,8 +448,8 @@ export async function ticketRoutes(app: FastifyInstance) {
         let recipientTelegramId: string | null = (ticket as any).telegramId ?? null;
         if (!recipientTelegramId) {
           const reportedBy = (ticket as any).reportedBy as string;
-          const mod = await db.moderator.findFirst({
-            where: { OR: [{ name: reportedBy }, { name: `@${reportedBy}` }] },
+          const mod = await db.user.findFirst({
+            where: { OR: [{ username: reportedBy }, { username: reportedBy.replace(/^@/, "") }] },
             select: { telegramId: true },
           });
           recipientTelegramId = mod?.telegramId ?? null;
