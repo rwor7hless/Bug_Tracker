@@ -93,6 +93,12 @@ export default function Moderators() {
     loadUsers();
   }
 
+  async function removeUser(id: string) {
+    if (!confirm("Удалить пользователя?")) return;
+    await fetch(`/api/users/${id}`, { method: "DELETE" });
+    loadUsers();
+  }
+
   async function changePassword(userId: string) {
     setPwError("");
     setPwSuccess("");
@@ -267,18 +273,32 @@ export default function Moderators() {
                 </p>
               </div>
               {u.role !== "ADMIN" && (
-                <button
-                  className="btn-ghost"
-                  style={{ fontSize: 12 }}
-                  onClick={() => {
-                    setEditingId(editingId === u.id ? null : u.id);
-                    setNewPassword("");
-                    setPwError("");
-                    setPwSuccess("");
-                  }}
-                >
-                  {editingId === u.id ? "Отмена" : "Сменить пароль"}
-                </button>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button
+                    className="btn-ghost"
+                    title={editingId === u.id ? "Отмена" : "Сменить пароль"}
+                    style={{ padding: "5px 8px", color: editingId === u.id ? "var(--accent)" : "var(--text-3)" }}
+                    onClick={() => {
+                      setEditingId(editingId === u.id ? null : u.id);
+                      setNewPassword("");
+                      setPwError("");
+                      setPwSuccess("");
+                    }}
+                  >
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="7.5" cy="15.5" r="5.5"/>
+                      <path d="M21 2l-9.6 9.6"/>
+                      <path d="M15.5 7.5l3 3L22 7l-3-3"/>
+                    </svg>
+                  </button>
+                  <button
+                    className="btn-danger"
+                    style={{ fontSize: 12 }}
+                    onClick={() => removeUser(u.id)}
+                  >
+                    Удалить
+                  </button>
+                </div>
               )}
             </div>
 
