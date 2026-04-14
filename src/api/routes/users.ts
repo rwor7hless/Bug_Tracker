@@ -78,22 +78,6 @@ export async function userRoutes(app: FastifyInstance) {
     }
   );
 
-  app.delete<{ Params: { id: string } }>(
-    "/api/users/:id",
-    { preHandler: requireAuth },
-    async (req, reply) => {
-      const caller = (req as any).user;
-      if (caller?.role !== "ADMIN") return reply.code(403).send({ error: "Forbidden" });
-
-      const target = await db.user.findUnique({ where: { id: req.params.id } });
-      if (!target) return reply.code(404).send({ error: "User not found" });
-      if (target.role === "ADMIN") return reply.code(403).send({ error: "Нельзя удалить администратора" });
-
-      await db.user.delete({ where: { id: req.params.id } });
-      return reply.code(204).send();
-    }
-  );
-
   // Self-service password change (any authenticated user)
   app.patch<{ Body: { oldPassword: string; newPassword: string } }>(
     "/api/users/me/password",

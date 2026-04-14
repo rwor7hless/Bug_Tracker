@@ -88,9 +88,3 @@ enum Role {
   MODERATOR
 }
 
-model Moderator {
-  id         String   @id @default(uuid())
-  telegramId String   @unique
-  name       String?
-  createdAt  DateTime @default(now())
-}

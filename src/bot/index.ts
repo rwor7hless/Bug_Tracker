@@ -19,7 +19,7 @@ export function startBot() {
   // Check moderator access
   bot.use(async (ctx, next) => {
     const telegramId = String(ctx.from?.id);
-    const allowed = await db.moderator.findUnique({ where: { telegramId } });
+    const allowed = await db.user.findFirst({ where: { telegramId } });
     if (!allowed) {
       await ctx.reply("Доступ запрещён. Обратитесь к администратору.");
       return;
