@@ -80,6 +80,7 @@ export default function Moderators() {
     e.preventDefault();
     setAddUserError("");
     setAddUserResult(null);
+    setBulkResults(null);
     const r = await fetch("/api/users", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -111,6 +112,7 @@ export default function Moderators() {
     if (!confirm("Сгенерировать новые пароли всем модераторам? Старые пароли перестанут работать.")) return;
     setBulkLoading(true);
     setBulkResults(null);
+    setAddUserResult(null);
     const r = await fetch("/api/users/bulk-reset", { method: "POST" });
     setBulkLoading(false);
     if (!r.ok) return;
@@ -170,53 +172,16 @@ export default function Moderators() {
       </div>
 
       {/* === Web panel users === */}
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
-        <h2 style={{ fontSize: 17, fontWeight: 700, color: "var(--text)", margin: 0, flex: 1 }}>
-          Пользователи панели
-        </h2>
-        <button
-          className="btn-ghost"
-          style={{ fontSize: 12, whiteSpace: "nowrap" }}
-          onClick={bulkReset}
-          disabled={bulkLoading}
-        >
-          {bulkLoading ? "Генерация..." : "Сгенерировать всем пароли"}
-        </button>
-      </div>
+      <h2 style={{ fontSize: 17, fontWeight: 700, marginBottom: 16, color: "var(--text)" }}>
+        Пользователи панели
+      </h2>
 
-      {bulkResults && (
-        <div className="card" style={{ marginBottom: 16, fontSize: 13 }}>
-          <p style={{ fontWeight: 600, marginBottom: 8 }}>Новые пароли — сохраните и раздайте:</p>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th style={{ textAlign: "left", color: "var(--text-2)", fontWeight: 500, paddingBottom: 6, fontSize: 12 }}>Логин</th>
-                <th style={{ textAlign: "left", color: "var(--text-2)", fontWeight: 500, paddingBottom: 6, fontSize: 12 }}>Пароль</th>
-              </tr>
-            </thead>
-            <tbody>
-              {bulkResults.map((r) => (
-                <tr key={r.id}>
-                  <td style={{ paddingBottom: 4, paddingRight: 16 }}>{r.username}</td>
-                  <td><code style={{ userSelect: "all" }}>{r.password}</code></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <button
-            className="btn-ghost"
-            style={{ fontSize: 11, marginTop: 10 }}
-            onClick={() => setBulkResults(null)}
-          >
-            Скрыть
-          </button>
-        </div>
-      )}
-
-      <div className="card" style={{ marginBottom: 16 }}>
+      {/* Create + bulk reset in one card */}
+      <div className="card" style={{ marginBottom: 16, display: "flex", flexDirection: "column", gap: 14 }}>
+        {/* New user row */}
         <form onSubmit={addUser} style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
           <div style={{ flex: "1 1 180px", display: "flex", flexDirection: "column", gap: 6 }}>
-            <label style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>Новый пользователь *</label>
+            <label style={{ fontSize: 12, color: "var(--text-2)", fontWeight: 500 }}>Новый пользователь</label>
             <input
               placeholder="username"
               value={newUsername}
@@ -228,16 +193,69 @@ export default function Moderators() {
             Создать
           </button>
         </form>
-        {addUserError && <p style={{ color: "var(--red)", fontSize: 13, marginTop: 8 }}>{addUserError}</p>}
+
+        {/* Divider */}
+        <div style={{ borderTop: "1px solid var(--border)" }} />
+
+        {/* Bulk reset row */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <p style={{ fontSize: 13, color: "var(--text-2)" }}>Сбросить пароли всем модераторам</p>
+          </div>
+          <button
+            className="btn-ghost"
+            style={{ fontSize: 12, whiteSpace: "nowrap" }}
+            onClick={bulkReset}
+            disabled={bulkLoading}
+          >
+            {bulkLoading ? "Генерация..." : "Сгенерировать всем"}
+          </button>
+        </div>
+
+        {/* Results */}
+        {addUserError && <p style={{ color: "var(--red)", fontSize: 13 }}>{addUserError}</p>}
         {addUserResult && (
-          <div style={{ marginTop: 10, background: "var(--surface2)", borderRadius: "var(--radius)", padding: "10px 14px", fontSize: 13 }}>
+          <div style={{ background: "var(--surface2)", borderRadius: "var(--radius)", padding: "10px 14px", fontSize: 13 }}>
             <p style={{ marginBottom: 4, fontWeight: 600 }}>Пользователь создан — сохраните пароль:</p>
             <p>Логин: <code style={{ userSelect: "all" }}>{addUserResult.username}</code></p>
             <p>Пароль: <code style={{ userSelect: "all" }}>{addUserResult.password}</code></p>
           </div>
         )}
+        {bulkResults && (
+          <div style={{ background: "var(--surface2)", borderRadius: "var(--radius)", padding: "10px 14px", fontSize: 13 }}>
+            <p style={{ fontWeight: 600, marginBottom: 8 }}>Новые пароли — сохраните и раздайте:</p>
+            {bulkResults.length === 0 ? (
+              <p style={{ color: "var(--text-3)" }}>Нет модераторов для сброса.</p>
+            ) : (
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", color: "var(--text-2)", fontWeight: 500, paddingBottom: 6, fontSize: 12 }}>Логин</th>
+                    <th style={{ textAlign: "left", color: "var(--text-2)", fontWeight: 500, paddingBottom: 6, fontSize: 12 }}>Пароль</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bulkResults.map((r) => (
+                    <tr key={r.id}>
+                      <td style={{ paddingBottom: 4, paddingRight: 16 }}>{r.username}</td>
+                      <td><code style={{ userSelect: "all" }}>{r.password}</code></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <button
+              className="btn-ghost"
+              style={{ fontSize: 11, marginTop: 8 }}
+              onClick={() => setBulkResults(null)}
+            >
+              Скрыть
+            </button>
+          </div>
+        )}
       </div>
 
+      {/* User list */}
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {users.map((u) => (
           <div key={u.id} className="card" style={{ padding: "12px 16px" }}>
