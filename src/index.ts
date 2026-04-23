@@ -14,6 +14,7 @@ import { userRoutes } from "./api/routes/users.js";
 import { moderatorRoutes } from "./api/routes/moderators.js";
 import { startBot } from "./bot/index.js";
 import { scheduleWeeklyCleanup } from "./cleanup.js";
+import { startBackupScheduler } from "./backup/scheduler.js";
 import db from "./db.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -66,3 +67,4 @@ await app.listen({ port, host: "0.0.0.0" });
 
 startBot();
 scheduleWeeklyCleanup();
+startBackupScheduler();
